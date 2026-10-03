@@ -1,0 +1,7 @@
+listen = "0.0.0.0:8787"
+token = "test-token-shinitrack-secret-12345"
+db_path = "shinitrack-server.db"
+poll_interval_ms = 1000
+feed_size = 30
+reconcile_minutes = 10
+debug = true

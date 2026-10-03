@@ -1,0 +1,23 @@
+[package]
+name = "shinitrack-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Polls Shinigami every ~1s and pushes notifications for favorite comics only."
+
+[[bin]]
+name = "shinitrack-server"
+path = "src/main.rs"
+
+[dependencies]
+shinitrack-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["net", "signal"] }
+axum = "0.8"
+toml = "0.8"
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

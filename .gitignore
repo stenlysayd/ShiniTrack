@@ -1,0 +1,58 @@
+# ==============================================================================
+# Rust & Cargo
+# ==============================================================================
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# ==============================================================================
+# Android & Gradle
+# ==============================================================================
+.gradle/
+**/build/
+**/app/build/
+**/gen/android/.gradle/
+**/gen/android/build/
+**/gen/android/app/build/
+**/gen/android/local.properties
+**/gen/android/**/.cxx/
+**/gen/android/app/src/main/jniLibs/arm64-v8a/*
+!**/gen/android/app/src/main/jniLibs/arm64-v8a/.gitkeep
+
+# Keystores & Signing
+*.jks
+*.keystore
+debug.keystore
+
+# ==============================================================================
+# Binary & Compiled Executables
+# ==============================================================================
+*.apk
+*.idsig
+*.aab
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ==============================================================================
+# Local Databases & Logs
+# ==============================================================================
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+shinitrack-server.db
+shinitrack.db
+*.log
+
+# ==============================================================================
+# IDE & Operating System Files
+# ==============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

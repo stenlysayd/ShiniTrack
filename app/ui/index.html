@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#090a0f" />
+  <title>ShiniTrack</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="topbar">
+    <button id="back" class="icon-btn hidden" aria-label="Kembali">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+      </svg>
+    </button>
+    <div class="brand-title">
+      <img src="logo.png" class="brand-logo" alt="ShiniTrack Logo" />
+      <div class="brand-meta">
+        <h1 id="title">ShiniTrack</h1>
+        <span id="subtitle" class="brand-sub">Manga Tracker</span>
+      </div>
+    </div>
+    <button id="sync" class="icon-btn" aria-label="Sinkronisasi Sekarang" title="Sinkronisasi Sekarang">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+      </svg>
+    </button>
+  </header>
+
+  <!-- Sticky In-App Update Banner -->
+  <div id="update-banner" class="update-banner hidden">
+    <div class="ub-pill">NEW</div>
+    <div class="ub-text">
+      <b id="ub-version">v0.2.1 Tersedia</b>
+      <span id="ub-desc">Pembaruan baru siap dipasang</span>
+    </div>
+    <button id="ub-btn" class="btn small primary">Perbarui</button>
+  </div>
+
+  <!-- Main View Container -->
+  <main id="view" aria-live="polite"></main>
+
+  <!-- Bottom Navigation Tab Bar -->
+  <nav class="tabbar" aria-label="Navigasi Utama">
+    <a href="#/favorites" data-tab="favorites">
+      <span class="tab-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+        </svg>
+      </span>
+      <span class="tab-label">Library</span>
+    </a>
+    <a href="#/schedule" data-tab="schedule">
+      <span class="tab-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="16" y1="2" x2="16" y2="6"></line>
+          <line x1="8" y1="2" x2="8" y2="6"></line>
+          <line x1="3" y1="10" x2="21" y2="10"></line>
+        </svg>
+      </span>
+      <span class="tab-label">Jadwal</span>
+    </a>
+    <a href="#/search" data-tab="search">
+      <span class="tab-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </span>
+      <span class="tab-label">Eksplor</span>
+    </a>
+    <a href="#/updates" data-tab="updates">
+      <span class="tab-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+        </svg>
+        <b id="badge" class="badge hidden">0</b>
+      </span>
+      <span class="tab-label">Update</span>
+    </a>
+    <a href="#/settings" data-tab="settings">
+      <span class="tab-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </span>
+      <span class="tab-label">Setelan</span>
+    </a>
+  </nav>
+
+  <!-- In-App Update Modal -->
+  <div id="update-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-badge-row">
+          <span class="modal-badge">RILIS TERBARU</span>
+          <span id="modal-update-date" class="modal-date">Rilis: Baru</span>
+        </div>
+        <h2 id="modal-update-title">ShiniTrack v0.2.1</h2>
+      </div>
+      <div class="modal-body">
+        <div class="modal-section-label">Catatan Perubahan</div>
+        <div id="modal-changelog" class="changelog-box"></div>
+        <div id="modal-dl-progress" class="dl-progress-box hidden">
+          <div class="dl-status">
+            <span id="dl-text">Menghubungkan ke GitHub...</span>
+            <span id="dl-pct">0%</span>
+          </div>
+          <div class="progress-bar"><div id="dl-bar" class="progress-fill"></div></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="modal-cancel-btn" class="btn">Nanti</button>
+        <button id="modal-install-btn" class="btn primary">Unduh & Pasang</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script src="icons.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
