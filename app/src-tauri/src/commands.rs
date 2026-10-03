@@ -501,7 +501,7 @@ pub async fn check_app_update(
     let repo_to_use = repo
         .filter(|s| !s.trim().is_empty())
         .or(settings.github_repo)
-        .unwrap_or_else(|| "shinitrack/shinitrack".into());
+        .unwrap_or_else(|| "stenlysayd/ShiniTrack".into());
 
     crate::updater::check_github_release(&repo_to_use, crate::updater::CURRENT_APP_VERSION)
         .await
@@ -604,6 +604,62 @@ pub fn list_read_chapters(
         .lock()
         .unwrap()
         .list_read_chapter_ids(&manga_id)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn mark_chapter_read(
+    ctx: State<'_, AppCtx>,
+    manga_id: String,
+    chapter_id: String,
+    chapter_number: f64,
+    read: bool,
+) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .mark_chapter_read(&manga_id, &chapter_id, chapter_number, read)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn mark_chapters_batch(
+    ctx: State<'_, AppCtx>,
+    manga_id: String,
+    chapters: Vec<(String, f64)>,
+    read: bool,
+) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .mark_chapters_read_batch(&manga_id, &chapters, read)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn save_manga_meta(
+    ctx: State<'_, AppCtx>,
+    manga_id: String,
+    title: String,
+    cover: Option<String>,
+    country_id: Option<String>,
+) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .save_manga_meta(&manga_id, &title, cover.as_deref(), country_id.as_deref())
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn get_reading_history(
+    ctx: State<'_, AppCtx>,
+    limit: Option<u32>,
+) -> CmdResult<Vec<shinitrack_core::store::HistoryItem>> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .list_history(limit.unwrap_or(50))
         .map_err(err)
 }
 

@@ -17,10 +17,12 @@ const toastEl = document.getElementById('toast');
 const badgeEl = document.getElementById('badge');
 
 // Mihon-style persistent state
-let libraryViewMode = localStorage.getItem('shinitrack_view_mode') || 'grid'; // 'grid' | 'list'
-let libraryFilter = 'all'; // 'all' | 'unread' | 'reading'
+let libraryViewMode = localStorage.getItem('shinitrack_view_mode') || 'comfortable'; // 'comfortable' | 'compact' | 'list'
+let libraryCategory = localStorage.getItem('shinitrack_library_cat') || 'all'; // 'all' | 'reading' | 'unread' | 'completed' | 'downloaded'
+let librarySort = localStorage.getItem('shinitrack_library_sort') || 'recent'; // 'recent' | 'alpha' | 'unread' | 'updated'
 let librarySearchQuery = '';
-let readerMode = localStorage.getItem('shinitrack_reader_mode') || 'webtoon'; // 'webtoon' | 'paged'
+let exploreTab = 'catalog'; // 'catalog' | 'schedule'
+let readerMode = localStorage.getItem('shinitrack_reader_mode') || 'webtoon'; // 'webtoon' | 'paged-ltr' | 'paged-rtl'
 let availableUpdate = null;
 let updateModalData = null;
 
@@ -52,6 +54,21 @@ function pageUrl(chapterId, file) {
 function formatWeekday(wdIndex) {
   const days = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
   return days[wdIndex % 7] || '';
+}
+
+function formatRelativeTime(date) {
+  const now = new Date();
+  const diffSec = Math.max(0, Math.floor((now - date) / 1000));
+  if (diffSec < 60) return 'Baru saja';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} menit lalu`;
+  if (diffSec < 86400) {
+    const hours = Math.floor(diffSec / 3600);
+    return `${hours} jam lalu`;
+  }
+  const days = Math.floor(diffSec / 86400);
+  if (days === 1) return `Kemarin, ${date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`;
+  if (days < 7) return `${days} hari lalu`;
+  return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
 }
 
 function formatPrediction(p) {
@@ -116,7 +133,7 @@ function handleRoute() {
   // Highlight active tab
   document.querySelectorAll('.tabbar a').forEach(a => {
     const tab = a.getAttribute('data-tab');
-    if (path.startsWith(`/${tab}`)) {
+    if (path.startsWith(`/${tab}`) || (tab === 'search' && path === '/schedule')) {
       a.classList.add('active');
     } else {
       a.classList.remove('active');
@@ -131,9 +148,16 @@ function handleRoute() {
   }
 
   if (path === '/favorites') renderFavorites();
-  else if (path === '/schedule') renderSchedule();
-  else if (path === '/search') renderSearch();
   else if (path === '/updates') renderUpdates();
+  else if (path === '/history') renderHistory();
+  else if (path === '/search') {
+    exploreTab = 'catalog';
+    renderSearch();
+  }
+  else if (path === '/schedule') {
+    exploreTab = 'schedule';
+    renderSearch();
+  }
   else if (path === '/settings') renderSettings();
   else if (path.startsWith('/manga/')) {
     const mangaId = path.split('/')[2];
@@ -308,20 +332,63 @@ async function renderFavorites() {
       return;
     }
 
+    // Category counts
+    const readingCount = list.filter(item => {
+      const prog = readingMap[item.manga_id];
+      return prog && (!item.last_ch_num || prog.chapter_number < item.last_ch_num);
+    }).length;
+    const unreadCount = list.filter(item => unreadMangaSet.has(item.manga_id) || !readingMap[item.manga_id]).length;
+    const completedCount = list.filter(item => {
+      const prog = readingMap[item.manga_id];
+      return prog && item.last_ch_num && prog.chapter_number >= item.last_ch_num;
+    }).length;
+
     // Filter items
     let filtered = list;
     if (librarySearchQuery.trim()) {
       const q = librarySearchQuery.toLowerCase().trim();
       filtered = filtered.filter(item => item.title.toLowerCase().includes(q));
     }
-    if (libraryFilter === 'unread') {
-      filtered = filtered.filter(item => unreadMangaSet.has(item.manga_id));
-    } else if (libraryFilter === 'reading') {
-      filtered = filtered.filter(item => readingMap[item.manga_id]);
+    if (libraryCategory === 'reading') {
+      filtered = filtered.filter(item => {
+        const prog = readingMap[item.manga_id];
+        return prog && (!item.last_ch_num || prog.chapter_number < item.last_ch_num);
+      });
+    } else if (libraryCategory === 'unread') {
+      filtered = filtered.filter(item => unreadMangaSet.has(item.manga_id) || !readingMap[item.manga_id]);
+    } else if (libraryCategory === 'completed') {
+      filtered = filtered.filter(item => {
+        const prog = readingMap[item.manga_id];
+        return prog && item.last_ch_num && prog.chapter_number >= item.last_ch_num;
+      });
     }
 
-    const unreadCount = list.filter(item => unreadMangaSet.has(item.manga_id)).length;
-    const readingCount = list.filter(item => readingMap[item.manga_id]).length;
+    // Sort items
+    filtered.sort((a, b) => {
+      if (librarySort === 'alpha') {
+        return a.title.localeCompare(b.title);
+      } else if (librarySort === 'unread') {
+        const aUnread = unreadMangaSet.has(a.manga_id) ? 1 : 0;
+        const bUnread = unreadMangaSet.has(b.manga_id) ? 1 : 0;
+        return bUnread - aUnread;
+      } else if (librarySort === 'updated') {
+        return (b.last_ch_num || 0) - (a.last_ch_num || 0);
+      } else {
+        // 'recent' reading
+        const aProg = readingMap[a.manga_id];
+        const bProg = readingMap[b.manga_id];
+        if (aProg && bProg) {
+          return new Date(bProg.updated_at) - new Date(aProg.updated_at);
+        }
+        if (aProg) return -1;
+        if (bProg) return 1;
+        return new Date(b.added_at) - new Date(a.added_at);
+      }
+    });
+
+    let viewModeLabel = 'Nyaman';
+    if (libraryViewMode === 'compact') viewModeLabel = 'Padat';
+    if (libraryViewMode === 'list') viewModeLabel = 'Daftar';
 
     let html = `
       <div class="lib-toolbar">
@@ -331,13 +398,25 @@ async function renderFavorites() {
             <input id="lib-search" class="search-input" type="search" placeholder="Cari di Library (${list.length})..." value="${librarySearchQuery}" />
           </div>
           <button id="view-mode-btn" class="view-toggle-btn" title="Ganti Tampilan">
-            ${libraryViewMode === 'grid' ? Icons.grid() + ' Grid' : Icons.list() + ' List'}
+            ${libraryViewMode === 'list' ? Icons.list() : Icons.grid()} ${viewModeLabel}
           </button>
         </div>
-        <div class="filter-chips">
-          <div class="chip ${libraryFilter === 'all' ? 'active' : ''}" data-filter="all">Semua (${list.length})</div>
-          <div class="chip ${libraryFilter === 'unread' ? 'active' : ''}" data-filter="unread">Belum Dibaca (${unreadCount})</div>
-          <div class="chip ${libraryFilter === 'reading' ? 'active' : ''}" data-filter="reading">Sedang Dibaca (${readingCount})</div>
+
+        <div class="lib-controls-row">
+          <div class="filter-chips">
+            <div class="chip ${libraryCategory === 'all' ? 'active' : ''}" data-cat="all">Semua (${list.length})</div>
+            <div class="chip ${libraryCategory === 'reading' ? 'active' : ''}" data-cat="reading">Sedang Dibaca (${readingCount})</div>
+            <div class="chip ${libraryCategory === 'unread' ? 'active' : ''}" data-cat="unread">Belum Dibaca (${unreadCount})</div>
+            <div class="chip ${libraryCategory === 'completed' ? 'active' : ''}" data-cat="completed">Selesai (${completedCount})</div>
+          </div>
+          <div style="flex-shrink:0;">
+            <select id="lib-sort" class="lib-sort-select">
+              <option value="recent" ${librarySort === 'recent' ? 'selected' : ''}>Terakhir Dibaca</option>
+              <option value="alpha" ${librarySort === 'alpha' ? 'selected' : ''}>Nama (A-Z)</option>
+              <option value="unread" ${librarySort === 'unread' ? 'selected' : ''}>Belum Dibaca</option>
+              <option value="updated" ${librarySort === 'updated' ? 'selected' : ''}>Rilis Terbaru</option>
+            </select>
+          </div>
         </div>
       </div>
     `;
@@ -347,15 +426,16 @@ async function renderFavorites() {
         <div class="empty">
           ${Icons.emptySearch()}
           <h3>Tidak Ada Hasil</h3>
-          <p>Tidak ada komik yang cocok dengan filter atau pencarian Anda.</p>
+          <p>Tidak ada komik yang cocok dengan kategori atau pencarian Anda.</p>
         </div>`;
       viewEl.innerHTML = html;
       attachLibraryEvents(list);
       return;
     }
 
-    if (libraryViewMode === 'grid') {
-      html += `<div class="manga-grid">`;
+    if (libraryViewMode === 'comfortable' || libraryViewMode === 'compact') {
+      const gridClass = libraryViewMode === 'compact' ? 'manga-grid compact' : 'manga-grid';
+      html += `<div class="${gridClass}">`;
       filtered.forEach(fav => {
         const prog = readingMap[fav.manga_id];
         const isUnread = unreadMangaSet.has(fav.manga_id);
@@ -425,20 +505,33 @@ function attachLibraryEvents(list) {
     });
   }
 
-  // View mode toggle
+  // View mode cycle: comfortable -> compact -> list -> comfortable
   const toggleBtn = document.getElementById('view-mode-btn');
   if (toggleBtn) {
     toggleBtn.addEventListener('click', () => {
-      libraryViewMode = libraryViewMode === 'grid' ? 'list' : 'grid';
+      if (libraryViewMode === 'comfortable') libraryViewMode = 'compact';
+      else if (libraryViewMode === 'compact') libraryViewMode = 'list';
+      else libraryViewMode = 'comfortable';
       localStorage.setItem('shinitrack_view_mode', libraryViewMode);
       renderFavorites();
     });
   }
 
-  // Filter chips
+  // Sort select
+  const sortSelect = document.getElementById('lib-sort');
+  if (sortSelect) {
+    sortSelect.addEventListener('change', (e) => {
+      librarySort = e.target.value;
+      localStorage.setItem('shinitrack_library_sort', librarySort);
+      renderFavorites();
+    });
+  }
+
+  // Category filter chips
   document.querySelectorAll('.filter-chips .chip').forEach(chip => {
     chip.addEventListener('click', () => {
-      libraryFilter = chip.dataset.filter;
+      libraryCategory = chip.dataset.cat;
+      localStorage.setItem('shinitrack_library_cat', libraryCategory);
       renderFavorites();
     });
   });
@@ -469,6 +562,84 @@ function attachLibraryEvents(list) {
       }
     });
   });
+}
+
+// ================================================================= VIEW: RIWAYAT (HISTORY)
+async function renderHistory() {
+  setHeaderTitles('Riwayat', 'Catatan Bacaan Terakhir');
+  viewEl.innerHTML = `
+    <div class="empty">
+      <div class="svg-icon spin">${Icons.sync()}</div>
+      <p style="margin-top:12px;">Memuat riwayat membaca...</p>
+    </div>`;
+
+  try {
+    const items = await invoke('get_reading_history', { limit: 60 });
+    if (!items || items.length === 0) {
+      viewEl.innerHTML = `
+        <div class="empty">
+          ${Icons.emptyHistory()}
+          <h3>Belum Ada Riwayat</h3>
+          <p>Komik yang kamu baca akan otomatis dicatat rapi di sini agar kamu bisa langsung melanjutkan membaca.</p>
+          <a class="btn primary small" href="#/favorites">
+            ${Icons.favorites()} Buka Library
+          </a>
+        </div>`;
+      return;
+    }
+
+    let html = `
+      <div class="history-list">
+        <div style="font-size:12px; color:var(--text-faint); margin-bottom:4px; padding:0 2px;">
+          ${items.length} riwayat bacaan terakhir
+        </div>
+    `;
+
+    items.forEach(item => {
+      const dt = new Date(item.updated_at);
+      const timeStr = formatRelativeTime(dt);
+      const pageInfo = item.last_page > 0 ? ` &bull; Hal. ${item.last_page + 1}` : '';
+
+      html += `
+        <div class="history-card click" data-ch-id="${item.chapter_id}" data-manga-id="${item.manga_id}">
+          <img class="history-cover" src="${coverUrl(item.cover)}" loading="lazy" alt="${item.title}" />
+          <div class="history-info">
+            <div class="history-title">${item.title}</div>
+            <div class="history-chapter">Chapter ${item.chapter_number}${pageInfo}</div>
+            <div class="history-time">${Icons.clock()} ${timeStr}</div>
+          </div>
+          <button class="btn small primary resume-btn" data-ch-id="${item.chapter_id}" title="Lanjut Baca">
+            ${Icons.play()} Lanjut
+          </button>
+        </div>
+      `;
+    });
+
+    html += `</div>`;
+    viewEl.innerHTML = html;
+
+    viewEl.querySelectorAll('.history-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.resume-btn')) return;
+        navigate(`#/manga/${card.dataset.mangaId}`);
+      });
+    });
+
+    viewEl.querySelectorAll('.resume-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigate(`#/read/${btn.dataset.chId}`);
+      });
+    });
+
+  } catch (err) {
+    viewEl.innerHTML = `
+      <div class="empty">
+        ${Icons.alertTriangle()}
+        <h3>Gagal Memuat Riwayat</h3>
+        <p>${err}</p>
+      </div>`;
+  }
 }
 
 // ================================================================= VIEW: SCHEDULE
@@ -553,9 +724,41 @@ async function renderSchedule() {
 }
 
 // ================================================================= VIEW: SEARCH / EXPLORE
-async function renderSearch() {
-  setHeaderTitles('Eksplorasi', 'Katalog Shinigami');
+async function renderSearch(tabOverride) {
+  if (tabOverride) exploreTab = tabOverride;
+  setHeaderTitles('Eksplorasi', exploreTab === 'catalog' ? 'Katalog Shinigami' : 'Jadwal Rilis Mingguan');
+
   viewEl.innerHTML = `
+    <div class="explore-tabs">
+      <div id="tab-catalog" class="explore-tab-btn ${exploreTab === 'catalog' ? 'active' : ''}">
+        ${Icons.search()} Katalog Komik
+      </div>
+      <div id="tab-schedule" class="explore-tab-btn ${exploreTab === 'schedule' ? 'active' : ''}">
+        ${Icons.schedule()} Jadwal Rilis
+      </div>
+    </div>
+    <div id="explore-content"></div>
+  `;
+
+  document.getElementById('tab-catalog').addEventListener('click', () => {
+    exploreTab = 'catalog';
+    renderSearch();
+  });
+  document.getElementById('tab-schedule').addEventListener('click', () => {
+    exploreTab = 'schedule';
+    renderSearch();
+  });
+
+  const contentEl = document.getElementById('explore-content');
+  if (exploreTab === 'schedule') {
+    renderScheduleInto(contentEl);
+  } else {
+    renderCatalogInto(contentEl);
+  }
+}
+
+async function renderCatalogInto(container) {
+  container.innerHTML = `
     <div class="lib-toolbar" style="margin-bottom:12px;">
       <div class="lib-header">
         <div class="search-bar-wrap">
@@ -673,8 +876,104 @@ async function renderSearch() {
   doSearch('');
 }
 
-// ================================================================= VIEW: MANGA DETAIL
+async function renderScheduleInto(container) {
+  container.innerHTML = `
+    <div class="empty">
+      <div class="svg-icon spin">${Icons.sync()}</div>
+      <p style="margin-top:12px;">Menghitung kalkulasi jadwal rilis...</p>
+    </div>`;
+
+  try {
+    const sched = await invoke('schedule_week');
+    let html = '';
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    sched.days.forEach(day => {
+      const isToday = day.date === todayStr;
+      const dObj = new Date(day.date + 'T00:00:00');
+      const dayName = dObj.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short' });
+      
+      html += `
+        <div class="day ${isToday ? 'today' : ''}">
+          <h3>
+            <span>${dayName}</span>
+            ${isToday ? '<span class="pill high">HARI INI</span>' : `<span class="pill low">${day.items.length} komik</span>`}
+          </h3>
+      `;
+
+      if (day.items.length === 0) {
+        html += `<div class="s" style="padding: 6px 0; color: var(--text-faint);">Tidak ada jadwal rilis hari ini.</div>`;
+      } else {
+        day.items.forEach(item => {
+          const timeStr = new Date(item.prediction.next_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+          html += `
+            <div class="item" data-id="${item.manga_id}">
+              <img src="${coverUrl(item.cover)}" loading="lazy" alt="${item.title}" />
+              <div class="body">
+                <div class="t">${item.title}</div>
+                <div class="s">± ${item.prediction.window_hours} jam &bull; Akurasi ${Math.round(item.prediction.confidence * 100)}%</div>
+              </div>
+              <div class="time">${Icons.clock()} ~${timeStr}</div>
+            </div>
+          `;
+        });
+      }
+      html += `</div>`;
+    });
+
+    if (sched.overdue && sched.overdue.length > 0) {
+      html += `<div class="section-title">Terlambat / Kemungkinan Hiatus (${sched.overdue.length})</div>`;
+      sched.overdue.forEach(item => {
+        html += `
+          <div class="card click" data-id="${item.manga_id}">
+            <img class="cover" src="${coverUrl(item.cover)}" loading="lazy" alt="${item.title}" />
+            <div class="body">
+              <div class="t">${item.title}</div>
+              <div class="s" style="color:var(--bad);">${Icons.alertTriangle()} ${item.prediction.likely_hiatus ? 'Kemungkinan Hiatus (sudah lewat 2.5x siklus)' : 'Jadwal terlewat'}</div>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    container.innerHTML = html;
+
+    container.querySelectorAll('.item, .card').forEach(el => {
+      el.addEventListener('click', () => {
+        if (el.dataset.id) navigate(`#/manga/${el.dataset.id}`);
+      });
+    });
+
+  } catch (err) {
+    container.innerHTML = `
+      <div class="empty">
+        ${Icons.alertTriangle()}
+        <h3>Gagal Memuat Jadwal</h3>
+        <p>${err}</p>
+      </div>`;
+  }
+}
+
+// ================================================================= VIEW: MANGA DETAIL (MIHON GRADE)
+let mangaDetailState = {
+  mangaId: null,
+  sortAsc: false,
+  filter: 'all', // 'all' | 'unread' | 'downloaded'
+  batchMode: false,
+  selectedChapters: new Set(),
+};
+
 async function renderMangaDetail(mangaId) {
+  if (mangaDetailState.mangaId !== mangaId) {
+    mangaDetailState = {
+      mangaId,
+      sortAsc: false,
+      filter: 'all',
+      batchMode: false,
+      selectedChapters: new Set(),
+    };
+  }
+
   setHeaderTitles('Detail Komik', 'Informasi & Chapter');
   viewEl.innerHTML = `
     <div class="empty">
@@ -692,6 +991,33 @@ async function renderMangaDetail(mangaId) {
     const isFav = !!detail.favorite;
     const downloadedSet = new Set(chRes.downloaded || []);
     const readSet = new Set(readIds || []);
+
+    // Save manga meta for history display
+    invoke('save_manga_meta', {
+      mangaId,
+      title: m.title,
+      cover: m.cover_portrait_url || m.cover_image_url || null,
+      countryId: m.country_id || null,
+    }).catch(e => console.warn('Save meta err:', e));
+
+    // Sort chapters
+    let chapters = [...chRes.items];
+    if (mangaDetailState.sortAsc) {
+      chapters.sort((a, b) => a.chapter_number - b.chapter_number);
+    } else {
+      chapters.sort((a, b) => b.chapter_number - a.chapter_number);
+    }
+
+    // Filter chapters
+    if (mangaDetailState.filter === 'unread') {
+      chapters = chapters.filter(c => !readSet.has(c.chapter_id));
+    } else if (mangaDetailState.filter === 'downloaded') {
+      chapters = chapters.filter(c => downloadedSet.has(c.chapter_id));
+    }
+
+    const totalChapters = chRes.items.length;
+    const unreadCount = chRes.items.filter(c => !readSet.has(c.chapter_id)).length;
+    const downloadedCount = downloadedSet.size;
 
     let resumeBtnHtml = '';
     if (progress) {
@@ -732,20 +1058,44 @@ async function renderMangaDetail(mangaId) {
 
       <div id="desc-box" class="desc-card">${m.description || 'Tidak ada deskripsi tersedia.'}</div>
 
-      <div class="section-title">
-        <span>Daftar Chapter (${chRes.items.length})</span>
-        <span style="font-size:10px; color:var(--text-faint);">${downloadedSet.size} Diunduh</span>
+      <!-- Chapter Toolbar (Mihon-Grade) -->
+      <div class="chapter-toolbar">
+        <div>
+          <b>${totalChapters} Chapter</b> &bull; <span style="color:var(--cyan); font-weight:600;">${unreadCount} Belum</span> &bull; <span style="color:var(--text-faint);">${downloadedCount} Diunduh</span>
+        </div>
+        <div class="chapter-toolbar-actions">
+          <button id="ch-sort-btn" class="ch-sort-btn" title="Urutkan Chapter">
+            ${Icons.sort()} ${mangaDetailState.sortAsc ? 'Awal ⬆' : 'Terkini ⬇'}
+          </button>
+          <button id="ch-filter-btn" class="ch-filter-btn" title="Filter Chapter">
+            ${Icons.filter()} ${mangaDetailState.filter === 'all' ? 'Semua' : (mangaDetailState.filter === 'unread' ? 'Belum' : 'Diunduh')}
+          </button>
+          <button id="ch-batch-btn" class="ch-batch-btn ${mangaDetailState.batchMode ? 'active' : ''}" title="Pilih Banyak">
+            ${Icons.checkSquare()} ${mangaDetailState.batchMode ? 'Selesai' : 'Pilih'}
+          </button>
+        </div>
       </div>
+
       <div id="chapters-list">
     `;
 
-    chRes.items.forEach(ch => {
+    chapters.forEach(ch => {
       const isDl = downloadedSet.has(ch.chapter_id);
       const isRead = readSet.has(ch.chapter_id);
+      const isSelected = mangaDetailState.selectedChapters.has(ch.chapter_id);
       const relDate = ch.release_date ? new Date(ch.release_date).toLocaleDateString('id-ID') : '';
       
       html += `
-        <div class="chapter ${isRead ? 'read' : ''}" data-ch-id="${ch.chapter_id}">
+        <div class="chapter ${isRead ? 'read' : ''}" data-ch-id="${ch.chapter_id}" data-ch-num="${ch.chapter_number}">
+          ${mangaDetailState.batchMode ? `
+            <div class="chapter-select-box ${isSelected ? 'selected' : ''}" data-ch-id="${ch.chapter_id}">
+              ${isSelected ? Icons.checkSquare() : Icons.square()}
+            </div>
+          ` : `
+            <button class="ch-read-toggle-btn ${isRead ? 'is-read' : ''}" data-ch-id="${ch.chapter_id}" data-ch-num="${ch.chapter_number}" title="${isRead ? 'Tandai Belum Dibaca' : 'Tandai Sudah Dibaca'}">
+              ${isRead ? Icons.check() : Icons.square()}
+            </button>
+          `}
           <div class="n click">
             <b>Chapter ${ch.chapter_number}</b> ${ch.chapter_title ? `- ${ch.chapter_title}` : ''}
             ${isRead ? `<span class="pill high" style="margin-left:6px;">${Icons.check()} Dibaca</span>` : ''}
@@ -759,11 +1109,26 @@ async function renderMangaDetail(mangaId) {
     });
 
     html += `</div>`;
+
+    if (mangaDetailState.batchMode) {
+      html += `
+        <div class="batch-bar">
+          <div class="batch-count" id="batch-count-text">${mangaDetailState.selectedChapters.size} dipilih</div>
+          <div class="batch-actions">
+            <button id="batch-all-btn" class="btn small">Semua</button>
+            <button id="batch-mark-read" class="btn small primary">${Icons.check()} Dibaca</button>
+            <button id="batch-mark-unread" class="btn small">Belum</button>
+          </div>
+        </div>
+      `;
+    }
+
     viewEl.innerHTML = html;
 
     const descBox = document.getElementById('desc-box');
     descBox.addEventListener('click', () => descBox.classList.toggle('open'));
 
+    // Favorite toggle
     const favBtn = document.getElementById('det-fav-btn');
     favBtn.addEventListener('click', async () => {
       try {
@@ -780,6 +1145,7 @@ async function renderMangaDetail(mangaId) {
       }
     });
 
+    // Start / Resume buttons
     const resumeBtn = document.getElementById('resume-reading-btn');
     if (resumeBtn && progress) {
       resumeBtn.addEventListener('click', () => navigate(`#/read/${progress.chapter_id}`));
@@ -789,19 +1155,148 @@ async function renderMangaDetail(mangaId) {
       startBtn.addEventListener('click', () => navigate(`#/read/${startBtn.dataset.chId}`));
     }
 
-    viewEl.querySelectorAll('.chapter .n').forEach(n => {
-      n.addEventListener('click', () => {
-        const chId = n.closest('.chapter').dataset.chId;
-        navigate(`#/read/${chId}`);
+    // Sort button
+    document.getElementById('ch-sort-btn').addEventListener('click', () => {
+      mangaDetailState.sortAsc = !mangaDetailState.sortAsc;
+      renderMangaDetail(mangaId);
+    });
+
+    // Filter button: all -> unread -> downloaded -> all
+    document.getElementById('ch-filter-btn').addEventListener('click', () => {
+      if (mangaDetailState.filter === 'all') mangaDetailState.filter = 'unread';
+      else if (mangaDetailState.filter === 'unread') mangaDetailState.filter = 'downloaded';
+      else mangaDetailState.filter = 'all';
+      renderMangaDetail(mangaId);
+    });
+
+    // Batch mode toggle button
+    document.getElementById('ch-batch-btn').addEventListener('click', () => {
+      mangaDetailState.batchMode = !mangaDetailState.batchMode;
+      mangaDetailState.selectedChapters.clear();
+      renderMangaDetail(mangaId);
+    });
+
+    // Chapter row clicks
+    viewEl.querySelectorAll('.chapter').forEach(row => {
+      const chId = row.dataset.chId;
+      const chNum = parseFloat(row.dataset.chNum);
+
+      if (mangaDetailState.batchMode) {
+        row.addEventListener('click', (e) => {
+          if (e.target.closest('.dl-btn')) return;
+          if (mangaDetailState.selectedChapters.has(chId)) {
+            mangaDetailState.selectedChapters.delete(chId);
+          } else {
+            mangaDetailState.selectedChapters.add(chId);
+          }
+          const box = row.querySelector('.chapter-select-box');
+          const isSelected = mangaDetailState.selectedChapters.has(chId);
+          if (box) {
+            box.classList.toggle('selected', isSelected);
+            box.innerHTML = isSelected ? Icons.checkSquare() : Icons.square();
+          }
+          const countEl = document.getElementById('batch-count-text');
+          if (countEl) countEl.textContent = `${mangaDetailState.selectedChapters.size} dipilih`;
+        });
+      } else {
+        // Normal mode: click text opens chapter
+        const nEl = row.querySelector('.n');
+        if (nEl) {
+          nEl.addEventListener('click', () => navigate(`#/read/${chId}`));
+        }
+      }
+    });
+
+    // Single-click fast read toggle button
+    viewEl.querySelectorAll('.ch-read-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const chId = btn.dataset.chId;
+        const chNum = parseFloat(btn.dataset.chNum);
+        const isRead = btn.classList.contains('is-read');
+        const nextState = !isRead;
+
+        try {
+          await invoke('mark_chapter_read', {
+            mangaId,
+            chapterId: chId,
+            chapterNumber: chNum,
+            read: nextState,
+          });
+          btn.classList.toggle('is-read', nextState);
+          btn.innerHTML = nextState ? Icons.check() : Icons.square();
+          btn.closest('.chapter').classList.toggle('read', nextState);
+          showToast(nextState ? `Chapter ${chNum} ditandai dibaca` : `Chapter ${chNum} ditandai belum dibaca`);
+        } catch (err) {
+          showToast(`Error: ${err}`);
+        }
       });
     });
 
+    // Batch actions
+    if (mangaDetailState.batchMode) {
+      document.getElementById('batch-all-btn').addEventListener('click', () => {
+        const allSelected = mangaDetailState.selectedChapters.size === chapters.length;
+        if (allSelected) {
+          mangaDetailState.selectedChapters.clear();
+        } else {
+          chapters.forEach(c => mangaDetailState.selectedChapters.add(c.chapter_id));
+        }
+        renderMangaDetail(mangaId);
+      });
+
+      document.getElementById('batch-mark-read').addEventListener('click', async () => {
+        if (mangaDetailState.selectedChapters.size === 0) {
+          showToast('Pilih minimal satu chapter');
+          return;
+        }
+        const toMark = chapters
+          .filter(c => mangaDetailState.selectedChapters.has(c.chapter_id))
+          .map(c => [c.chapter_id, c.chapter_number]);
+        try {
+          await invoke('mark_chapters_batch', {
+            mangaId,
+            chapters: toMark,
+            read: true,
+          });
+          showToast(`${toMark.length} chapter ditandai dibaca`);
+          mangaDetailState.batchMode = false;
+          mangaDetailState.selectedChapters.clear();
+          renderMangaDetail(mangaId);
+        } catch (err) {
+          showToast(`Error: ${err}`);
+        }
+      });
+
+      document.getElementById('batch-mark-unread').addEventListener('click', async () => {
+        if (mangaDetailState.selectedChapters.size === 0) {
+          showToast('Pilih minimal satu chapter');
+          return;
+        }
+        const toMark = chapters
+          .filter(c => mangaDetailState.selectedChapters.has(c.chapter_id))
+          .map(c => [c.chapter_id, c.chapter_number]);
+        try {
+          await invoke('mark_chapters_batch', {
+            mangaId,
+            chapters: toMark,
+            read: false,
+          });
+          showToast(`${toMark.length} chapter ditandai belum dibaca`);
+          mangaDetailState.batchMode = false;
+          mangaDetailState.selectedChapters.clear();
+          renderMangaDetail(mangaId);
+        } catch (err) {
+          showToast(`Error: ${err}`);
+        }
+      });
+    }
+
+    // Download button handler
     viewEl.querySelectorAll('.dl-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const chId = btn.dataset.chId;
-        const row = btn.closest('.chapter');
-        const isDl = row.classList.contains('read') && btn.innerHTML.includes('Hapus');
 
         if (btn.innerHTML.includes('Hapus')) {
           try {
@@ -863,6 +1358,10 @@ async function renderReader(chapterId) {
       lastPage: 0
     }).catch(e => console.warn('Save progress error:', e));
 
+    let modeLabel = 'Webtoon';
+    if (readerMode === 'paged-ltr') modeLabel = 'Paged L-R';
+    if (readerMode === 'paged-rtl') modeLabel = 'Manga R-L';
+
     let html = `
       <div class="reader-wrapper">
         <!-- Floating HUD Top -->
@@ -872,8 +1371,8 @@ async function renderReader(chapterId) {
             <div style="font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff;">Chapter ${data.chapter_number}</div>
             <div style="font-size:11px; color:var(--text-muted);">${totalPages} Halaman ${data.offline ? '&bull; Offline' : ''}</div>
           </div>
-          <button id="reader-mode-btn" class="btn small" style="background:var(--surface-elevated);">
-            ${readerMode === 'webtoon' ? Icons.scroll() + ' Scroll' : Icons.book() + ' Paged'}
+          <button id="reader-mode-btn" class="btn small" style="background:var(--surface-elevated);" title="Ganti Mode Baca">
+            ${readerMode === 'webtoon' ? Icons.scroll() : Icons.book()} ${modeLabel}
           </button>
         </div>
 
@@ -914,25 +1413,44 @@ async function renderReader(chapterId) {
       hudBottom.classList.toggle('reader-hud-hidden', !visible);
     }
 
+    function markChapterCompleted() {
+      invoke('mark_chapter_read', {
+        mangaId: data.manga_id,
+        chapterId: data.chapter_id,
+        chapterNumber: data.chapter_number,
+        read: true,
+      }).catch(e => console.warn('Auto mark read err:', e));
+    }
+
     function renderModeView() {
       if (readerMode === 'webtoon') {
-        // Continuous Scroll
+        // Continuous Scroll (Webtoon)
         let scrollHtml = `<div class="reader-scroll">`;
         data.pages.forEach((file, idx) => {
           scrollHtml += `<img src="${pageUrl(data.chapter_id, file)}" loading="lazy" data-page="${idx + 1}" alt="Page ${idx + 1}" />`;
         });
+
+        // Chapter End Card
         scrollHtml += `
-          <div class="nav" style="padding: 24px 14px; gap:10px; display:flex; width:100%; max-width:600px;">
-            ${data.prev_chapter_id ? `<button class="btn" id="scroll-prev-btn" style="flex:1;">${Icons.back()} Ch. Sebelumnya</button>` : ''}
-            ${data.next_chapter_id ? `<button class="btn primary" id="scroll-next-btn" style="flex:1;">Ch. Selanjutnya ${Icons.chevronRight()}</button>` : ''}
+          <div class="chapter-end-card">
+            <div class="chapter-end-title">🎉 Chapter Selesai!</div>
+            <div class="chapter-end-desc">Kamu telah menyelesaikan Chapter ${data.chapter_number}.</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center; width:100%; max-width:400px; margin-top:8px;">
+              ${data.next_chapter_id ? `<button class="btn primary block" id="scroll-next-btn">${Icons.play()} Lanjut ke Chapter Selanjutnya</button>` : ''}
+              ${data.prev_chapter_id ? `<button class="btn small" id="scroll-prev-btn">${Icons.back()} Chapter Sebelumnya</button>` : ''}
+              <button class="btn small" id="scroll-detail-btn">Kembali ke Info Komik</button>
+            </div>
           </div>
         </div>`;
+
         contentEl.innerHTML = scrollHtml;
 
         const spBtn = document.getElementById('scroll-prev-btn');
         if (spBtn) spBtn.addEventListener('click', () => navigate(`#/read/${data.prev_chapter_id}`));
         const snBtn = document.getElementById('scroll-next-btn');
         if (snBtn) snBtn.addEventListener('click', () => navigate(`#/read/${data.next_chapter_id}`));
+        const sdBtn = document.getElementById('scroll-detail-btn');
+        if (sdBtn) sdBtn.addEventListener('click', () => navigate(`#/manga/${data.manga_id}`));
 
         // Click to toggle HUD
         contentEl.querySelectorAll('.reader-scroll img').forEach(img => {
@@ -952,6 +1470,11 @@ async function renderReader(chapterId) {
           pagePill.textContent = `${cur} / ${totalPages}`;
           slider.value = cur;
 
+          // If reached last page, auto mark read
+          if (cur >= totalPages) {
+            markChapterCompleted();
+          }
+
           // Save progress
           invoke('save_reading_progress', {
             mangaId: data.manga_id,
@@ -962,12 +1485,39 @@ async function renderReader(chapterId) {
         };
 
       } else {
-        // Paged Mode
+        // Paged Mode (LTR or RTL)
         window.onscroll = null;
         function showPagedImage(idx) {
+          if (idx >= totalPages) {
+            // Show End of Chapter Screen
+            markChapterCompleted();
+            contentEl.innerHTML = `
+              <div class="reader-paged" style="padding: 40px 14px;">
+                <div class="chapter-end-card" style="width:100%; max-width:440px;">
+                  <div class="chapter-end-title">🎉 Chapter ${data.chapter_number} Selesai!</div>
+                  <div class="chapter-end-desc">Semua halaman telah dibaca.</div>
+                  <div style="display:flex; flex-direction:column; gap:8px; width:100%; margin-top:8px;">
+                    ${data.next_chapter_id ? `<button class="btn primary" id="paged-next-ch-btn">${Icons.play()} Lanjut ke Chapter Selanjutnya</button>` : ''}
+                    <button class="btn" id="paged-replay-btn">${Icons.sync()} Baca Ulang Chapter Ini</button>
+                    <button class="btn small" id="paged-detail-btn">Kembali ke Komik</button>
+                  </div>
+                </div>
+              </div>
+            `;
+            const pnBtn = document.getElementById('paged-next-ch-btn');
+            if (pnBtn) pnBtn.addEventListener('click', () => navigate(`#/read/${data.next_chapter_id}`));
+            document.getElementById('paged-replay-btn').addEventListener('click', () => showPagedImage(0));
+            document.getElementById('paged-detail-btn').addEventListener('click', () => navigate(`#/manga/${data.manga_id}`));
+            return;
+          }
+
           currentPageIdx = Math.max(0, Math.min(idx, totalPages - 1));
           pagePill.textContent = `${currentPageIdx + 1} / ${totalPages}`;
           slider.value = currentPageIdx + 1;
+
+          if (currentPageIdx === totalPages - 1) {
+            markChapterCompleted();
+          }
 
           const file = data.pages[currentPageIdx];
           contentEl.innerHTML = `
@@ -979,10 +1529,18 @@ async function renderReader(chapterId) {
             </div>
           `;
 
+          const isRTL = readerMode === 'paged-rtl';
+
           document.getElementById('tap-left').addEventListener('click', () => {
-            if (currentPageIdx > 0) showPagedImage(currentPageIdx - 1);
-            else if (data.prev_chapter_id) navigate(`#/read/${data.prev_chapter_id}`);
-            else showToast('Halaman pertama');
+            if (isRTL) {
+              // RTL: left tap = NEXT page
+              showPagedImage(currentPageIdx + 1);
+            } else {
+              // LTR: left tap = PREV page
+              if (currentPageIdx > 0) showPagedImage(currentPageIdx - 1);
+              else if (data.prev_chapter_id) navigate(`#/read/${data.prev_chapter_id}`);
+              else showToast('Halaman pertama');
+            }
           });
 
           document.getElementById('tap-center').addEventListener('click', () => {
@@ -990,9 +1548,15 @@ async function renderReader(chapterId) {
           });
 
           document.getElementById('tap-right').addEventListener('click', () => {
-            if (currentPageIdx < totalPages - 1) showPagedImage(currentPageIdx + 1);
-            else if (data.next_chapter_id) navigate(`#/read/${data.next_chapter_id}`);
-            else showToast('Chapter selesai! Membuka chapter selanjutnya...');
+            if (isRTL) {
+              // RTL: right tap = PREV page
+              if (currentPageIdx > 0) showPagedImage(currentPageIdx - 1);
+              else if (data.prev_chapter_id) navigate(`#/read/${data.prev_chapter_id}`);
+              else showToast('Halaman pertama');
+            } else {
+              // LTR: right tap = NEXT page
+              showPagedImage(currentPageIdx + 1);
+            }
           });
 
           // Save reading progress
@@ -1010,11 +1574,20 @@ async function renderReader(chapterId) {
 
     renderModeView();
 
-    // Mode toggle button
+    // Mode toggle button: webtoon -> paged-ltr -> paged-rtl -> webtoon
     modeBtn.addEventListener('click', () => {
-      readerMode = readerMode === 'webtoon' ? 'paged' : 'webtoon';
+      if (readerMode === 'webtoon') readerMode = 'paged-ltr';
+      else if (readerMode === 'paged-ltr') readerMode = 'paged-rtl';
+      else readerMode = 'webtoon';
+
       localStorage.setItem('shinitrack_reader_mode', readerMode);
-      modeBtn.innerHTML = readerMode === 'webtoon' ? Icons.scroll() + ' Scroll' : Icons.book() + ' Paged';
+      
+      let nextLabel = 'Webtoon';
+      if (readerMode === 'paged-ltr') nextLabel = 'Paged L-R';
+      if (readerMode === 'paged-rtl') nextLabel = 'Manga R-L';
+
+      modeBtn.innerHTML = `${readerMode === 'webtoon' ? Icons.scroll() : Icons.book()} ${nextLabel}`;
+      showToast(`Mode Baca: ${nextLabel}`);
       renderModeView();
     });
 

@@ -153,6 +153,33 @@ window.Icons = {
       <line x1="5" y1="12" x2="19" y2="12"></line>
     </svg>`,
 
+  sort: (cls = '') => `
+    <svg class="svg-icon ${cls}" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"></path>
+    </svg>`,
+
+  filter: (cls = '') => `
+    <svg class="svg-icon ${cls}" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+    </svg>`,
+
+  checkSquare: (cls = '') => `
+    <svg class="svg-icon ${cls}" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="9 11 12 14 22 4"></polyline>
+      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+    </svg>`,
+
+  square: (cls = '') => `
+    <svg class="svg-icon ${cls}" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+    </svg>`,
+
+  history: (cls = '') => `
+    <svg class="svg-icon ${cls}" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"></circle>
+      <polyline points="12 6 12 12 16 14"></polyline>
+    </svg>`,
+
   // Rich Composed Empty State Illustrations
   emptyLibrary: () => `
     <div class="empty-illustration">
@@ -199,6 +226,16 @@ window.Icons = {
         <rect x="72" y="56" width="12" height="12" rx="3" fill="#e11d48" opacity="0.8"/>
         <rect x="36" y="74" width="12" height="12" rx="3" fill="#252b3d"/>
         <rect x="54" y="74" width="12" height="12" rx="3" fill="#252b3d"/>
+      </svg>
+    </div>`,
+
+  emptyHistory: () => `
+    <div class="empty-illustration">
+      <svg viewBox="0 0 120 120" width="88" height="88" fill="none">
+        <circle cx="60" cy="60" r="44" fill="#141824" stroke="#252b3d" stroke-width="2"/>
+        <circle cx="60" cy="60" r="30" stroke="#37425f" stroke-width="2"/>
+        <polyline points="60 42 60 60 74 68" stroke="#e11d48" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="60" cy="60" r="3.5" fill="#e11d48"/>
       </svg>
     </div>`
 };

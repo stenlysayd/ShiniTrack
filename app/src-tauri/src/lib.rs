@@ -60,6 +60,10 @@ pub fn run() {
             commands::get_reading_progress,
             commands::list_all_reading_progress,
             commands::list_read_chapters,
+            commands::mark_chapter_read,
+            commands::mark_chapters_batch,
+            commands::save_manga_meta,
+            commands::get_reading_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ShiniTrack");

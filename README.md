@@ -104,62 +104,80 @@ flowchart TB
 - Displays rich changelogs, version comparison, and real-time streaming download progress bars.
 - Triggers native Android `PackageInstaller` via JNI and `FileProvider` (`ACTION_VIEW`), allowing instant 1-tap installation without third-party browsers.
 
-### 5. Mihon-Inspired Comic Reader & Library
-- **Dual Reading Modes:** Smooth continuous vertical Webtoon strip and book-style Paged tap navigation.
-- **Floating Glass HUD:** Tap-to-toggle Top & Bottom bars with 20px frosted backdrop blur.
-- **Page Scrubber Slider:** Interactive bottom slider for instant seek across hundreds of pages.
-- **Automatic Progress Persistence:** Automatically records last-read chapter and page index into local SQLite.
+### 5. Mihon-Grade Library & Category System
+- **3-Way Display Modes:** Seamlessly switch between **Comfortable Grid** (large immersive covers with gradient overlays), **Compact Grid** (dense space-efficient grid), and **Detailed List** (with release prediction radar).
+- **Dynamic Category Tabs:** Filter your library into **Semua**, **Sedang Dibaca**, **Belum Dibaca**, and **Selesai** with live count chips.
+- **Multi-Criteria Sorting:** Sort titles by *Terakhir Dibaca*, *Alfabetis (A-Z)*, *Jumlah Belum Dibaca*, or *Rilis Terbaru*.
+- **Unread Count & Activity Badges:** Instant visual indicators on manga cards for unread releases and notification status.
+
+### 6. Dedicated Reading History
+- **Chronological Reading Log:** Full timeline of recently read titles with relative timestamps (*"15 menit lalu"*, *"Kemarin 14:30"*).
+- **Exact Page Bookmarks:** Remembers your exact reading progress per chapter down to the individual page index.
+- **One-Tap Resume CTA:** Instant "Lanjut Baca" action button on every history card jumping straight into the reader.
+
+### 7. Mihon Chapter Batch Management & Fast Toggles
+- **Multi-Selection Mode:** Select multiple chapters at once with interactive checkboxes.
+- **Batch Actions:** Mark dozens of chapters as read or unread simultaneously with a single SQLite transaction.
+- **Instant 1-Tap Read Toggle:** One-click checkmark button beside every chapter for immediate read/unread status flipping.
+- **Chapter Filter & Order:** Filter chapter lists (*Semua / Belum Dibaca / Diunduh*) and invert sorting (*Terkini ⬇* vs *Awal ⬆*).
+
+### 8. Multi-Directional Reader Engine
+- **3 Reading Layouts:**
+  - **Webtoon Mode:** GPU-accelerated continuous vertical scroll with auto page detection and end-of-chapter transition.
+  - **Paged LTR:** Traditional western comic and book mode (Left-to-Right).
+  - **Manga RTL:** Authentic Japanese manga reading direction (Right-to-Left).
+- **Interactive Scrubber & HUD:** 20px frosted backdrop blur HUD with live page count slider and chapter jump buttons.
+- **Auto-Completion & Next Chapter:** Automatically marks chapters as read when reaching the final page and transitions smoothly into the next chapter.
 
 ---
 
 ## 🎮 Reading Gestures & Controls
 
-| Gesture / Zone | Action | Technical Function |
-| :--- | :--- | :--- |
-| **Tap Center (30%)** | **Toggle HUD** | Shows/hides floating Top Bar and Scrubber HUD |
-| **Tap Right (35%)** | **Next Page** | Advances to next page (Paged mode) or next chapter if at end |
-| **Tap Left (35%)** | **Previous Page** | Steps to previous page (Paged mode) or previous chapter |
-| **Scrubber Drag** | **Instant Seek** | Seamlessly navigates to target page index with live preview pill |
-| **Scroll (Vertical)** | **Fluid Reading** | GPU-accelerated vertical strip scrolling (Webtoon mode) |
-| **Mode Switcher** | **Toggle Layout** | Switches layout mode dynamically between `Webtoon` and `Paged` |
+| Gesture / Zone | Mode | Action | Technical Function |
+| :--- | :--- | :--- | :--- |
+| **Tap Center (30%)** | All Modes | **Toggle HUD** | Shows/hides floating Top Bar and Scrubber HUD |
+| **Tap Right (35%)** | Paged L-R | **Next Page** | Advances to next page (or next chapter at end) |
+| **Tap Left (35%)** | Paged L-R | **Previous Page** | Steps to previous page (or previous chapter) |
+| **Tap Left (35%)** | Manga R-L | **Next Page** | Japanese reading direction: advances forward |
+| **Tap Right (35%)** | Manga R-L | **Previous Page** | Japanese reading direction: steps backward |
+| **Scrubber Drag** | All Modes | **Instant Seek** | Seamlessly navigates to target page index with live preview pill |
+| **Scroll (Vertical)** | Webtoon | **Fluid Reading** | Hardware-accelerated continuous strip scrolling |
+| **Mode Switcher** | All Modes | **Layout Switch** | Cycles dynamically: `Webtoon` ➔ `Paged L-R` ➔ `Manga R-L` |
 
 ---
 
 ## 🔌 API & Tauri IPC Reference
 
-### Server REST Endpoints (Axum Daemon)
-
-| Endpoint | Method | Headers / Auth | Description |
-| :--- | :--- | :--- | :--- |
-| `/v1/events` | `GET` | `Authorization: Bearer <TOKEN>` | Retrieves recent unread chapter release events |
-| `/v1/events/seen` | `POST` | `Authorization: Bearer <TOKEN>` | Acknowledges and clears unread notification badges |
-| `/v1/favorites` | `GET` | `Authorization: Bearer <TOKEN>` | Retrieves synchronized list of tracked favorite manga |
-| `/v1/favorites` | `PUT` | `Authorization: Bearer <TOKEN>` | Bulk replaces tracked favorites baseline |
-| `/v1/debug` | `GET` | `Authorization: Bearer <TOKEN>` | Inspects poller health, circuit breaker, and cycle metrics |
-
 ### Core Tauri IPC Commands
 
 ```rust
 // Core Library & Feed
-invoke('list_favorites')                      // -> Vec<FavoriteItem>
-invoke('add_favorite', { mangaId })           // -> ()
-invoke('remove_favorite', { mangaId })        // -> ()
-invoke('set_notify', { mangaId, notify })     // -> ()
-invoke('schedule_week')                       // -> WeeklySchedule
-invoke('search', { query })                   // -> SearchResponse
-invoke('latest')                              // -> Vec<MangaItem>
+invoke('list_favorites')                                // -> Vec<FavoriteItem>
+invoke('add_favorite', { mangaId })                     // -> ()
+invoke('remove_favorite', { mangaId })                  // -> ()
+invoke('set_notify', { mangaId, notify })               // -> ()
+invoke('schedule_week')                                 // -> WeeklySchedule
+invoke('search', { query })                             // -> SearchResponse
+invoke('latest')                                        // -> Vec<MangaItem>
+
+// Mihon Chapter & History Management
+invoke('mark_chapter_read', { mangaId, chapterId, chapterNumber, read }) // -> ()
+invoke('mark_chapters_batch', { mangaId, chapters, read })               // -> ()
+invoke('list_read_chapters', { mangaId })               // -> HashSet<String>
+invoke('get_reading_history', { limit })                // -> Vec<HistoryItem>
+invoke('save_manga_meta', { mangaId, title, cover, countryId })          // -> ()
 
 // Reader & Offline Vault
-invoke('open_chapter', { chapterId })         // -> ChapterViewData
-invoke('download_chapter', { chapterId })     // -> u32 (total pages saved)
-invoke('delete_download', { chapterId })      // -> ()
-invoke('save_reading_progress', { ... })      // -> ()
-invoke('get_reading_progress', { mangaId })   // -> ReadingProgress
+invoke('open_chapter', { chapterId })                   // -> ChapterViewData
+invoke('download_chapter', { chapterId })               // -> u32 (total pages saved)
+invoke('delete_download', { chapterId })                // -> ()
+invoke('save_reading_progress', { ... })                // -> ()
+invoke('get_reading_progress', { mangaId })             // -> ReadingProgress
 
 // OTA Updater
-invoke('check_app_update', { repo })          // -> UpdateCheckResult
-invoke('download_and_install_update', { .. }) // -> InstallResult
-invoke('simulate_update_check')               // -> MockUpdateInfo
+invoke('check_app_update', { repo })                    // -> UpdateCheckResult
+invoke('download_and_install_update', { .. })           // -> InstallResult
+invoke('simulate_update_check')                         // -> MockUpdateInfo
 ```
 
 ---
@@ -181,11 +199,11 @@ invoke('simulate_update_check')               // -> MockUpdateInfo
 
 ### Option 1: Install Pre-Built APK (Android)
 Download the latest pre-compiled and signed release directly from the repository root:
-- [`ShiniTrack-v0.2.0.apk`](ShiniTrack-v0.2.0.apk) (15.9 MB, Signed v2+v3, Production Release).
+- [`ShiniTrack-v0.2.1.apk`](ShiniTrack-v0.2.1.apk) (16.2 MB, Signed v2+v3, Production Release).
 
 Install via ADB or manual file transfer:
 ```powershell
-adb install -r ShiniTrack-v0.2.0.apk
+adb install -r ShiniTrack-v0.2.1.apk
 ```
 
 ---

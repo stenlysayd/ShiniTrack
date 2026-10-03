@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-pub const CURRENT_APP_VERSION: &str = "0.2.0";
-pub const CURRENT_BUILD_CODE: u32 = 2000;
+pub const CURRENT_APP_VERSION: &str = "0.2.1";
+pub const CURRENT_BUILD_CODE: u32 = 2001;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {

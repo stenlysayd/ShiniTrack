@@ -22,8 +22,8 @@ android {
         applicationId = "id.shinitrack.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "2").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "0.2.0")
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "2001").toInt()
+        versionName = tauriProperties.getProperty("tauri.android.versionName", "0.2.1")
     }
     buildTypes {
         getByName("debug") {

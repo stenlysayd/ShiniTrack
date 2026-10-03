@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chapter_read (
+    chapter_id     TEXT PRIMARY KEY,
+    manga_id       TEXT NOT NULL,
+    chapter_number REAL NOT NULL,
+    read_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chapter_read_manga ON chapter_read(manga_id);
+CREATE TABLE IF NOT EXISTS manga_meta (
+    manga_id   TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    cover      TEXT,
+    country_id TEXT,
+    updated_at TEXT NOT NULL
+);
 "#;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -533,22 +547,151 @@ impl Store {
         Ok(map)
     }
 
+    pub fn save_manga_meta(
+        &self,
+        manga_id: &str,
+        title: &str,
+        cover: Option<&str>,
+        country_id: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            r#"INSERT INTO manga_meta (manga_id, title, cover, country_id, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5)
+               ON CONFLICT(manga_id) DO UPDATE SET
+                   title = excluded.title,
+                   cover = COALESCE(excluded.cover, manga_meta.cover),
+                   country_id = COALESCE(excluded.country_id, manga_meta.country_id),
+                   updated_at = excluded.updated_at"#,
+            params![manga_id, title, cover, country_id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_chapter_read(
+        &self,
+        manga_id: &str,
+        chapter_id: &str,
+        chapter_number: f64,
+        read: bool,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        if read {
+            self.conn.execute(
+                r#"INSERT INTO chapter_read (chapter_id, manga_id, chapter_number, read_at)
+                   VALUES (?1, ?2, ?3, ?4)
+                   ON CONFLICT(chapter_id) DO UPDATE SET read_at = excluded.read_at"#,
+                params![chapter_id, manga_id, chapter_number, now],
+            )?;
+        } else {
+            self.conn.execute("DELETE FROM chapter_read WHERE chapter_id = ?1", params![chapter_id])?;
+            self.conn.execute("DELETE FROM reading_progress WHERE chapter_id = ?1", params![chapter_id])?;
+        }
+        Ok(())
+    }
+
+    pub fn mark_chapters_read_batch(
+        &mut self,
+        manga_id: &str,
+        chapters: &[(String, f64)],
+        read: bool,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let now = Utc::now().to_rfc3339();
+        if read {
+            let mut stmt = tx.prepare(
+                r#"INSERT INTO chapter_read (chapter_id, manga_id, chapter_number, read_at)
+                   VALUES (?1, ?2, ?3, ?4)
+                   ON CONFLICT(chapter_id) DO UPDATE SET read_at = excluded.read_at"#,
+            )?;
+            for (ch_id, ch_num) in chapters {
+                stmt.execute(params![ch_id, manga_id, ch_num, now])?;
+            }
+        } else {
+            let mut stmt_del_cr = tx.prepare("DELETE FROM chapter_read WHERE chapter_id = ?1")?;
+            let mut stmt_del_rp = tx.prepare("DELETE FROM reading_progress WHERE chapter_id = ?1")?;
+            for (ch_id, _) in chapters {
+                stmt_del_cr.execute(params![ch_id])?;
+                stmt_del_rp.execute(params![ch_id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn list_read_chapter_ids(&self, manga_id: &str) -> Result<HashSet<String>> {
-        let mut stmt = self
+        let mut set = HashSet::new();
+        let mut stmt1 = self
             .conn
             .prepare("SELECT chapter_id FROM reading_progress WHERE manga_id = ?1")?;
-        let rows = stmt.query_map(params![manga_id], |r| r.get(0))?;
-        let mut set = HashSet::new();
-        for r in rows {
+        let rows1 = stmt1.query_map(params![manga_id], |r| r.get(0))?;
+        for r in rows1 {
+            set.insert(r?);
+        }
+
+        let mut stmt2 = self
+            .conn
+            .prepare("SELECT chapter_id FROM chapter_read WHERE manga_id = ?1")?;
+        let rows2 = stmt2.query_map(params![manga_id], |r| r.get(0))?;
+        for r in rows2 {
             set.insert(r?);
         }
         Ok(set)
+    }
+
+    pub fn list_history(&self, limit: u32) -> Result<Vec<HistoryItem>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                 p.manga_id,
+                 COALESCE(m.title, f.title, p.manga_id) AS title,
+                 COALESCE(m.cover, f.cover) AS cover,
+                 p.chapter_id,
+                 p.chapter_number,
+                 p.last_page,
+                 p.updated_at
+               FROM reading_progress p
+               LEFT JOIN manga_meta m ON p.manga_id = m.manga_id
+               LEFT JOIN favorites f ON p.manga_id = f.manga_id
+               ORDER BY p.updated_at DESC
+               LIMIT ?1"#,
+        )?;
+        let rows = stmt.query_map(params![limit], |r| {
+            let dt_str: String = r.get(6)?;
+            let updated_at = DateTime::parse_from_rfc3339(&dt_str)
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            Ok(HistoryItem {
+                manga_id: r.get(0)?,
+                title: r.get(1)?,
+                cover: r.get(2)?,
+                chapter_id: r.get(3)?,
+                chapter_number: r.get(4)?,
+                last_page: r.get(5)?,
+                updated_at,
+            })
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadingProgress {
     pub manga_id: String,
+    pub chapter_id: String,
+    pub chapter_number: f64,
+    pub last_page: u32,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryItem {
+    pub manga_id: String,
+    pub title: String,
+    pub cover: Option<String>,
     pub chapter_id: String,
     pub chapter_number: f64,
     pub last_page: u32,
@@ -659,4 +802,36 @@ mod tests {
         assert!(read_ids.contains("ch-100"));
         assert!(!read_ids.contains("ch-101"));
     }
+
+    #[test]
+    fn chapter_read_batch_and_history() {
+        let mut s = Store::open_in_memory().unwrap();
+        s.save_manga_meta("one-piece", "One Piece", Some("https://example.com/op.jpg"), Some("jp")).unwrap();
+        s.mark_chapter_read("one-piece", "ch-1", 1.0, true).unwrap();
+        s.mark_chapters_read_batch(
+            "one-piece",
+            &[("ch-2".into(), 2.0), ("ch-3".into(), 3.0)],
+            true,
+        ).unwrap();
+
+        let read_ids = s.list_read_chapter_ids("one-piece").unwrap();
+        assert_eq!(read_ids.len(), 3);
+        assert!(read_ids.contains("ch-1"));
+        assert!(read_ids.contains("ch-2"));
+        assert!(read_ids.contains("ch-3"));
+
+        // Unmark ch-2
+        s.mark_chapter_read("one-piece", "ch-2", 2.0, false).unwrap();
+        let read_ids2 = s.list_read_chapter_ids("one-piece").unwrap();
+        assert_eq!(read_ids2.len(), 2);
+        assert!(!read_ids2.contains("ch-2"));
+
+        // Progress + history
+        s.save_reading_progress("one-piece", "ch-3", 3.0, 10).unwrap();
+        let hist = s.list_history(10).unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0].title, "One Piece");
+        assert_eq!(hist[0].chapter_id, "ch-3");
+    }
 }
+
