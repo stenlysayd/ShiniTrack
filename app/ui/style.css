@@ -825,6 +825,17 @@ button {
 }
 
 /* ========================================================= MIHON READER */
+body.reader-active .topbar,
+body.reader-active .tabbar,
+body.reader-active .update-banner {
+  display: none !important;
+}
+
+body.reader-active main {
+  padding: 0 !important;
+  max-width: 100% !important;
+}
+
 .reader-wrapper {
   position: relative;
   min-height: 100vh;

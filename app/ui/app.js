@@ -149,6 +149,13 @@ function handleRoute() {
     }
   });
 
+  // Fullscreen reader mode
+  if (path.startsWith('/read/')) {
+    document.body.classList.add('reader-active');
+  } else {
+    document.body.classList.remove('reader-active');
+  }
+
   // Handle subpages & back button
   if (path.startsWith('/manga/') || path.startsWith('/read/')) {
     backBtn.classList.remove('hidden');
@@ -310,6 +317,12 @@ function setupUpdateModal() {
       }
     });
   }
+  const ubDismiss = document.getElementById('ub-dismiss');
+  if (ubDismiss) {
+    ubDismiss.addEventListener('click', () => {
+      document.getElementById('update-banner').classList.add('hidden');
+    });
+  }
 }
 
 function showUpdateModal(info) {
@@ -320,7 +333,17 @@ function showUpdateModal(info) {
   document.getElementById('modal-update-date').textContent = info.published_at
     ? `Rilis: ${new Date(info.published_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`
     : 'Rilis: Baru';
-  document.getElementById('modal-changelog').textContent = info.release_notes || 'Peningkatan performa dan perbaikan bug.';
+  const rawNotes = info.release_notes || 'Peningkatan performa dan perbaikan bug.';
+  document.getElementById('modal-changelog').innerHTML = rawNotes
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/^### (.*$)/gim, '<h3 style="margin-top:10px;margin-bottom:4px;">$1</h3>')
+    .replace(/^## (.*$)/gim, '<h2 style="margin-top:10px;margin-bottom:4px;">$1</h2>')
+    .replace(/^# (.*$)/gim, '<h1 style="margin-top:10px;margin-bottom:4px;">$1</h1>')
+    .replace(/^- (.*$)/gim, '<ul style="margin:4px 0;padding-left:20px;"><li>$1</li></ul>')
+    .replace(/<\/ul>\n<ul.*?>/g, '')
+    .replace(/\n/g, '<br/>');
   
   const dlBox = document.getElementById('modal-dl-progress');
   dlBox.classList.add('hidden');
