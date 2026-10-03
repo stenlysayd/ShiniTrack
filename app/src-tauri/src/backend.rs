@@ -73,8 +73,7 @@ impl Default for Settings {
 pub fn load_settings(store: &Store) -> anyhow::Result<Settings> {
     let get = |k| store.kv_get(k).map(|v| v.filter(|s| !s.trim().is_empty()));
     let github_repo = match get(KV_GITHUB_REPO)? {
-        Some(r) if r.trim() == "shinitrack/shinitrack" => default_github_repo(),
-        Some(r) => Some(r),
+        Some(r) => Some(crate::updater::clean_github_repo(&r)),
         None => default_github_repo(),
     };
     let auto_check_update = match get(KV_AUTO_CHECK_UPDATE)? {
@@ -94,7 +93,8 @@ pub fn save_settings(store: &Store, s: &Settings) -> anyhow::Result<()> {
     store.kv_set(KV_SERVER_URL, s.server_url.as_deref().unwrap_or("").trim())?;
     store.kv_set(KV_SERVER_TOKEN, s.server_token.as_deref().unwrap_or("").trim())?;
     store.kv_set(KV_LOW_QUALITY, if s.low_quality { "1" } else { "0" })?;
-    store.kv_set(KV_GITHUB_REPO, s.github_repo.as_deref().unwrap_or("stenlysayd/ShiniTrack").trim())?;
+    let repo_clean = crate::updater::clean_github_repo(s.github_repo.as_deref().unwrap_or("stenlysayd/ShiniTrack"));
+    store.kv_set(KV_GITHUB_REPO, &repo_clean)?;
     store.kv_set(KV_AUTO_CHECK_UPDATE, if s.auto_check_update { "1" } else { "0" })?;
     Ok(())
 }

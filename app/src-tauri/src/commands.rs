@@ -65,15 +65,24 @@ impl AppCtx {
 
 pub fn show_notices<R: Runtime>(app: &AppHandle<R>, notices: &[Notice]) {
     for n in notices {
-        if let Err(e) = app
-            .notification()
-            .builder()
-            .id(n.id)
-            .title(&n.title)
-            .body(&n.text)
-            .show()
+        #[cfg(target_os = "android")]
         {
-            log::warn!("notification failed: {e}");
+            if let Err(e) = crate::jni_bridge::show_native_notification(n) {
+                log::warn!("native android notification failed: {e}");
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            if let Err(e) = app
+                .notification()
+                .builder()
+                .id(n.id)
+                .title(&n.title)
+                .body(&n.text)
+                .show()
+            {
+                log::warn!("notification failed: {e}");
+            }
         }
     }
 }
@@ -397,11 +406,11 @@ pub async fn test_notification<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
     show_notices(
         &app,
         &[Notice {
-            id: 1,
-            manga_id: String::new(),
-            title: "ShiniTrack".into(),
-            text: "Test notification works ✅".into(),
-            cover: None,
+            id: 9999,
+            manga_id: "solo-leveling-ragnarok".into(),
+            title: "Solo Leveling: Ragnarok".into(),
+            text: "Chapter 35 telah rilis! Ketuk untuk membaca langsung.".into(),
+            cover: Some("https://shinigami.asia/media/covers/solo-leveling-ragnarok.jpg".into()),
         }],
     );
     Ok(())
@@ -498,36 +507,54 @@ pub async fn check_app_update(
     repo: Option<String>,
 ) -> CmdResult<crate::updater::UpdateInfo> {
     let settings = ctx.settings().unwrap_or_default();
-    let repo_to_use = repo
+    let repo_raw = repo
         .filter(|s| !s.trim().is_empty())
         .or(settings.github_repo)
         .unwrap_or_else(|| "stenlysayd/ShiniTrack".into());
 
+    let repo_to_use = crate::updater::clean_github_repo(&repo_raw);
     crate::updater::check_github_release(&repo_to_use, crate::updater::CURRENT_APP_VERSION)
         .await
         .map_err(err)
-}
-
-#[derive(Serialize)]
-pub struct InstallUpdateResult {
-    pub success: bool,
-    pub message: String,
-    pub file_path: String,
 }
 
 #[tauri::command]
 pub async fn download_and_install_update<R: Runtime>(
     app: AppHandle<R>,
     download_url: String,
-) -> CmdResult<InstallUpdateResult> {
-    let path = crate::updater::download_and_install_apk(&app, &download_url)
+) -> CmdResult<crate::updater::InstallOutcome> {
+    crate::updater::download_and_install_apk(&app, &download_url)
         .await
-        .map_err(err)?;
-    Ok(InstallUpdateResult {
-        success: true,
-        message: "File APK berhasil diunduh. Membuka pemasang paket Android...".into(),
-        file_path: path,
-    })
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub fn can_install_updates() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        crate::jni_bridge::can_install_packages().unwrap_or(true)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+pub fn request_install_permission() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        crate::jni_bridge::request_install_permission().unwrap_or(false)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+pub fn install_downloaded_apk(file_path: String) -> CmdResult<crate::updater::InstallOutcome> {
+    crate::updater::install_apk_file(&file_path).map_err(err)
 }
 
 #[tauri::command]

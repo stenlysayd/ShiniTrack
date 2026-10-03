@@ -64,7 +64,7 @@ pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeInit(
     }
 }
 
-pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<bool> {
+pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<crate::updater::InstallOutcome> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
     let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
@@ -72,10 +72,51 @@ pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<bool> {
     let val = env.call_static_method(
         class,
         "triggerInstallApk",
-        "(Ljava/lang/String;)Z",
+        "(Ljava/lang/String;)Ljava/lang/String;",
         &[(&j_path).into()],
     )?;
+    let j_str: JString = val.l()?.into();
+    let json = get_string(&mut env, &j_str).unwrap_or_default();
+    let outcome: crate::updater::InstallOutcome = serde_json::from_str(&json).unwrap_or(
+        crate::updater::InstallOutcome {
+            success: false,
+            needs_permission: false,
+            message: "Gagal memproses hasil instalasi".into(),
+            file_path: apk_path.to_string(),
+        },
+    );
+    Ok(outcome)
+}
+
+pub fn can_install_packages() -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let val = env.call_static_method(class, "canInstallPackages", "()Z", &[])?;
     Ok(val.z()?)
+}
+
+pub fn request_install_permission() -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let val = env.call_static_method(class, "requestInstallPermission", "()Z", &[])?;
+    Ok(val.z()?)
+}
+
+pub fn show_native_notification(notice: &backend::Notice) -> anyhow::Result<()> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let json = serde_json::to_string(notice)?;
+    let j_json = env.new_string(&json)?;
+    env.call_static_method(
+        class,
+        "showNotification",
+        "(Ljava/lang/String;)V",
+        &[(&j_json).into()],
+    )?;
+    Ok(())
 }
 
 /// WorkManager periodic job. Returns a JSON array of notices.

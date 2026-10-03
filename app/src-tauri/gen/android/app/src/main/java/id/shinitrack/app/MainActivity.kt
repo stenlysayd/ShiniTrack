@@ -69,6 +69,28 @@ class MainActivity : TauriActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        ShiniBridge.currentActivity = this
+
+        // If an APK install was pending user granting REQUEST_INSTALL_PACKAGES, retry automatically:
+        val pending = ShiniBridge.pendingApkPath
+        if (pending != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (packageManager.canRequestPackageInstalls()) {
+                Log.i(TAG, "Install permission granted! Resuming installation for: $pending")
+                ShiniBridge.pendingApkPath = null
+                ShiniBridge.installApk(this, pending)
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (ShiniBridge.currentActivity === this) {
+            ShiniBridge.currentActivity = null
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

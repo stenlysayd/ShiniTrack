@@ -64,6 +64,9 @@ pub fn run() {
             commands::mark_chapters_batch,
             commands::save_manga_meta,
             commands::get_reading_history,
+            commands::can_install_updates,
+            commands::request_install_permission,
+            commands::install_downloaded_apk,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ShiniTrack");

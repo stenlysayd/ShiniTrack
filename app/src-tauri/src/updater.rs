@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-pub const CURRENT_APP_VERSION: &str = "0.2.1";
-pub const CURRENT_BUILD_CODE: u32 = 2001;
+pub const CURRENT_APP_VERSION: &str = "0.2.2";
+pub const CURRENT_BUILD_CODE: u32 = 2002;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
@@ -25,6 +25,36 @@ pub struct DownloadProgressPayload {
     pub progress: u8,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstallOutcome {
+    pub success: bool,
+    #[serde(rename = "needsPermission", default)]
+    pub needs_permission: bool,
+    pub message: String,
+    #[serde(default)]
+    pub file_path: String,
+}
+
+pub fn clean_github_repo(raw: &str) -> String {
+    let mut s = raw.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("shinitrack/shinitrack") {
+        return "stenlysayd/ShiniTrack".to_string();
+    }
+    if let Some(rest) = s.strip_prefix("https://github.com/") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("http://github.com/") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("github.com/") {
+        s = rest;
+    }
+    s = s.trim_end_matches(".git").trim_matches('/');
+    if s.is_empty() || s.eq_ignore_ascii_case("shinitrack/shinitrack") {
+        "stenlysayd/ShiniTrack".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 pub fn parse_semver(s: &str) -> (u32, u32, u32) {
@@ -58,10 +88,7 @@ pub async fn check_github_release(
     repo: &str,
     current_version: &str,
 ) -> anyhow::Result<UpdateInfo> {
-    let repo_clean = repo.trim().trim_matches('/');
-    if repo_clean.is_empty() {
-        anyhow::bail!("Nama repository GitHub tidak boleh kosong.");
-    }
+    let repo_clean = clean_github_repo(repo);
     let url = format!("https://api.github.com/repos/{repo_clean}/releases/latest");
     let client = reqwest::Client::builder()
         .user_agent(format!("ShiniTrack-App/{current_version}"))
@@ -128,25 +155,25 @@ pub async fn check_github_release(
 pub fn mock_update_info(current_version: &str) -> UpdateInfo {
     UpdateInfo {
         current_version: current_version.to_string(),
-        latest_version: "v0.2.1".to_string(),
+        latest_version: "v0.2.2".to_string(),
         update_available: true,
-        release_name: "ShiniTrack v0.2.1 - Mihon Style Update".to_string(),
-        release_notes: "### ✨ Pembaruan v0.2.1 (Mihon Edition)\n- In-App Updater otomatis via GitHub Releases\n- Tampilan Library Grid/List ala Mihon\n- Reader Mode: Webtoon continuous scroll & Paged mode\n- Tracking riwayat membaca otomatis\n- Notifikasi update instan untuk komik favorit".to_string(),
+        release_name: "ShiniTrack v0.2.2 - Mihon UX Edition".to_string(),
+        release_notes: "### ✨ Pembaruan v0.2.2\n- Perbaikan installer APK & izin install unknown sources otomatis\n- Notifikasi rich ala Mihon dengan cover art dan tombol aksi\n- Sinkronisasi URL target repository GitHub yang tepat".to_string(),
         published_at: chrono::Utc::now().to_rfc3339(),
         download_url: Some(
-            "https://github.com/shinitrack/shinitrack/releases/download/v0.2.1/ShiniTrack-release.apk"
+            "https://github.com/stenlysayd/ShiniTrack/releases/download/v0.2.2/ShiniTrack-v0.2.2.apk"
                 .to_string(),
         ),
-        apk_name: Some("ShiniTrack-release.apk".to_string()),
-        apk_size: Some(15817118),
-        html_url: "https://github.com/shinitrack/shinitrack/releases".to_string(),
+        apk_name: Some("ShiniTrack-v0.2.2.apk".to_string()),
+        apk_size: Some(15980958),
+        html_url: "https://github.com/stenlysayd/ShiniTrack/releases".to_string(),
     }
 }
 
 pub async fn download_and_install_apk<R: Runtime>(
     app: &AppHandle<R>,
     download_url: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<InstallOutcome> {
     let client = reqwest::Client::builder()
         .user_agent(format!("ShiniTrack-App/{CURRENT_APP_VERSION}"))
         .build()?;
@@ -187,12 +214,12 @@ pub async fn download_and_install_apk<R: Runtime>(
     let path_str = target_path.to_string_lossy().into_owned();
     log::info!("Update APK downloaded to: {path_str}");
 
-    install_apk_file(&path_str)?;
-
-    Ok(path_str)
+    let mut outcome = install_apk_file(&path_str)?;
+    outcome.file_path = path_str;
+    Ok(outcome)
 }
 
-pub fn install_apk_file(apk_path: &str) -> anyhow::Result<bool> {
+pub fn install_apk_file(apk_path: &str) -> anyhow::Result<InstallOutcome> {
     #[cfg(target_os = "android")]
     {
         crate::jni_bridge::trigger_install_apk(apk_path)
@@ -200,6 +227,12 @@ pub fn install_apk_file(apk_path: &str) -> anyhow::Result<bool> {
     #[cfg(not(target_os = "android"))]
     {
         log::info!("Mock install on non-android platform: {apk_path}");
-        Ok(true)
+        Ok(InstallOutcome {
+            success: true,
+            needs_permission: false,
+            message: format!("Mock installer dibuka untuk: {apk_path}"),
+            file_path: apk_path.to_string(),
+        })
     }
 }
+

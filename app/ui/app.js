@@ -25,6 +25,15 @@ let exploreTab = 'catalog'; // 'catalog' | 'schedule'
 let readerMode = localStorage.getItem('shinitrack_reader_mode') || 'webtoon'; // 'webtoon' | 'paged-ltr' | 'paged-rtl'
 let availableUpdate = null;
 let updateModalData = null;
+let downloadedApkPath = null;
+
+function sanitizeRepo(repo) {
+  if (!repo) return 'stenlysayd/ShiniTrack';
+  let r = String(repo).trim();
+  if (r.toLowerCase() === 'shinitrack/shinitrack' || !r) return 'stenlysayd/ShiniTrack';
+  r = r.replace(/^https?:\/\/github\.com\//i, '').replace(/^github\.com\//i, '').replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '');
+  return r || 'stenlysayd/ShiniTrack';
+}
 
 function setHeaderTitles(title, subtitle = 'Manga Tracker') {
   if (titleEl) titleEl.textContent = title;
@@ -216,6 +225,34 @@ function setupUpdateModal() {
   installBtn.addEventListener('click', async () => {
     if (!updateModalData) return;
 
+    // If APK is already downloaded on device, directly trigger package installer:
+    if (downloadedApkPath) {
+      installBtn.disabled = true;
+      installBtn.textContent = 'Membuka Installer...';
+      try {
+        const res = await invoke('install_downloaded_apk', { filePath: downloadedApkPath });
+        if (res.needsPermission) {
+          showToast(res.message, 6000);
+          dlText.innerHTML = `<span style="color:#f59e0b;font-weight:600;">Izin Diperlukan:</span> Silakan izinkan "Install unknown apps" untuk ShiniTrack di setelan Android yang terbuka, lalu ketuk tombol <b>Pasang Pembaruan</b> di bawah.`;
+          installBtn.disabled = false;
+          installBtn.textContent = 'Pasang Pembaruan';
+          await invoke('request_install_permission');
+        } else if (res.success) {
+          showToast(res.message, 5000);
+          modal.classList.add('hidden');
+        } else {
+          showToast(res.message, 5000);
+          installBtn.disabled = false;
+          installBtn.textContent = 'Coba Pasang Lagi';
+        }
+      } catch (err) {
+        showToast(`Gagal memasang APK: ${err}`, 5000);
+        installBtn.disabled = false;
+        installBtn.textContent = 'Coba Pasang Lagi';
+      }
+      return;
+    }
+
     if (!updateModalData.download_url) {
       if (updateModalData.html_url) {
         window.open(updateModalData.html_url, '_blank');
@@ -237,10 +274,27 @@ function setupUpdateModal() {
       const res = await invoke('download_and_install_update', {
         downloadUrl: updateModalData.download_url
       });
-      showToast(res.message, 5000);
-      modal.classList.add('hidden');
+      downloadedApkPath = res.file_path;
+
+      if (res.needsPermission) {
+        dlBar.style.width = '100%';
+        dlPct.textContent = '100%';
+        dlText.innerHTML = `<span style="color:#f59e0b;font-weight:600;">Izin Diperlukan:</span> Aktifkan "Izinkan dari sumber ini" di setelan Android yang baru terbuka, lalu ketuk <b>Pasang Pembaruan</b> di bawah.`;
+        showToast(res.message, 6000);
+        installBtn.disabled = false;
+        installBtn.textContent = 'Pasang Pembaruan';
+        cancelBtn.disabled = false;
+      } else if (res.success) {
+        showToast(res.message, 5000);
+        modal.classList.add('hidden');
+      } else {
+        showToast(res.message, 5000);
+        installBtn.disabled = false;
+        installBtn.textContent = 'Pasang Pembaruan';
+        cancelBtn.disabled = false;
+      }
     } catch (err) {
-      showToast(`Gagal memasang update: ${err}`, 5000);
+      showToast(`Gagal mengunduh update: ${err}`, 5000);
       installBtn.disabled = false;
       installBtn.textContent = 'Coba Lagi';
       cancelBtn.disabled = false;
@@ -260,6 +314,7 @@ function setupUpdateModal() {
 
 function showUpdateModal(info) {
   updateModalData = info;
+  downloadedApkPath = null;
   const modal = document.getElementById('update-modal');
   document.getElementById('modal-update-title').textContent = `${info.release_name || 'ShiniTrack ' + info.latest_version}`;
   document.getElementById('modal-update-date').textContent = info.published_at
@@ -279,7 +334,8 @@ function showUpdateModal(info) {
 
 async function checkForUpdates(silent = false, customRepo = null) {
   try {
-    const info = await invoke('check_app_update', { repo: customRepo });
+    const cleanRepo = customRepo ? sanitizeRepo(customRepo) : null;
+    const info = await invoke('check_app_update', { repo: cleanRepo });
     if (info.update_available) {
       availableUpdate = info;
       const banner = document.getElementById('update-banner');
@@ -1733,7 +1789,8 @@ async function renderSettings() {
       <div class="settings-group">
         <div class="field">
           <label>GitHub Repository Target</label>
-          <input id="cfg-repo" type="text" placeholder="shinitrack/shinitrack" value="${s.github_repo || 'shinitrack/shinitrack'}" />
+          <input id="cfg-repo" type="text" placeholder="stenlysayd/ShiniTrack" value="${sanitizeRepo(s.github_repo)}" />
+          <small style="color:var(--text-dim);font-size:11px;margin-top:4px;display:block;">Default: <code>stenlysayd/ShiniTrack</code> (Bisa berupa <code>owner/repo</code> atau URL GitHub)</small>
         </div>
 
         <div class="switch-row">
@@ -1794,8 +1851,8 @@ async function renderSettings() {
     checkBtn.addEventListener('click', async () => {
       checkBtn.disabled = true;
       checkBtn.innerHTML = `${Icons.sync('spin')} Mengecek...`;
-      const repoInput = document.getElementById('cfg-repo').value.trim();
-      await checkForUpdates(false, repoInput || null);
+      const repoInput = sanitizeRepo(document.getElementById('cfg-repo').value);
+      await checkForUpdates(false, repoInput);
       checkBtn.disabled = false;
       checkBtn.innerHTML = `${Icons.sync()} Cek Update`;
     });
@@ -1813,11 +1870,12 @@ async function renderSettings() {
 
     // Save config
     document.getElementById('save-cfg').addEventListener('click', async () => {
+      const repoVal = sanitizeRepo(document.getElementById('cfg-repo').value);
       const newSettings = {
         server_url: document.getElementById('cfg-url').value.trim() || null,
         server_token: document.getElementById('cfg-token').value.trim() || null,
         low_quality: document.getElementById('cfg-low').checked,
-        github_repo: document.getElementById('cfg-repo').value.trim() || 'shinitrack/shinitrack',
+        github_repo: repoVal,
         auto_check_update: document.getElementById('cfg-autoupdate').checked
       };
 
