@@ -45,6 +45,7 @@ debug.keystore
 shinitrack-server.db
 shinitrack.db
 *.log
+config.toml
 
 # ==============================================================================
 # IDE & Operating System Files
@@ -56,3 +57,5 @@ shinitrack.db
 *~
 .DS_Store
 Thumbs.db
+*.jks
+keystore.properties
