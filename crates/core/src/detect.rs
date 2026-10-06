@@ -59,6 +59,7 @@ mod tests {
             status: None,
             bookmark_count: None,
             country_id: None,
+            taxonomy: HashMap::new(),
         }
     }
 

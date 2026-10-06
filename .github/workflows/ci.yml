@@ -29,3 +29,55 @@ jobs:
 
       - name: Run Tests
         run: cargo test --workspace --verbose
+
+  android-debug:
+    name: Build Android Debug APK
+    runs-on: ubuntu-latest
+    # UNSURE: whether android-debug should wait for test (needs: test) or run concurrently
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin' # UNSURE: JDK distribution (using Eclipse Temurin)
+          java-version: '17'
+
+      - name: Setup Android SDK and NDK
+        uses: android-actions/setup-android@v3
+        with:
+          # UNSURE: exact NDK revision (using 28.2.13676358) and build-tools revision (using 36.0.0) from local project
+          packages: 'platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358'
+
+      - name: Set NDK_HOME
+        # UNSURE: whether NDK_HOME environment variable is strictly required or auto-detected by Tauri CLI
+        run: |
+          if [ -d "$ANDROID_HOME/ndk/28.2.13676358" ]; then
+            echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> $GITHUB_ENV
+          elif [ -d "$ANDROID_HOME/ndk" ]; then
+            echo "NDK_HOME=$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | head -n 1)" >> $GITHUB_ENV
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Tauri CLI
+        # UNSURE: cargo install flags (e.g., --locked)
+        run: cargo install tauri-cli --version "^2.0"
+
+      - name: Build Android Debug APK
+        run: cargo tauri android build --debug --apk -t aarch64
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug # UNSURE: preferred artifact name
+          path: app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk # UNSURE: exact output glob path
+          if-no-files-found: error # UNSURE: whether to fail job if APK is not found
+

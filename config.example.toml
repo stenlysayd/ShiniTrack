@@ -1,0 +1,30 @@
+# ShiniTrack server config. Copy to config.toml and edit.
+
+listen = "0.0.0.0:8787"
+
+# REQUIRED: random string >= 16 chars. The app sends it as a Bearer token.
+# Generate one in PowerShell:  -join ((48..57)+(97..122) | Get-Random -Count 32 | % {[char]$_})
+token = "change-me-to-a-long-random-string"
+
+db_path = "shinitrack-server.db"
+
+# Base poll interval in milliseconds (plus 0-300 ms jitter and automatic back-off).
+# 1000 = once per second (~86,400 requests/day). Minimum allowed is 250.
+poll_interval_ms = 1000
+
+# How many most-recently-updated series to read per poll.
+feed_size = 30
+
+# Safety net: check each favorite's detail page every N minutes.
+reconcile_minutes = 10
+
+# Enables POST /v1/debug/fake-update (for testing notifications). Keep false in production.
+debug = false
+
+# Optional: a plain ntfy topic (notifications appear in the ntfy app itself).
+# UnifiedPush delivery into the ShiniTrack app needs no settings here; the app
+# registers its endpoint automatically.
+[ntfy]
+# server = "https://ntfy.example.com"
+# topic = "shinitrack-7f3a9c2e"
+# auth_token = "tk_..."

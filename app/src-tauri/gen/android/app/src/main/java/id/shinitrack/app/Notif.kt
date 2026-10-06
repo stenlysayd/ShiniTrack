@@ -33,7 +33,7 @@ object Notif {
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 250, 150, 250)
                     enableLights(true)
-                    lightColor = 0xFF6366F1.toInt()
+                    lightColor = 0xFFE11D48.toInt()
                     setShowBadge(true)
                     lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
                 }
@@ -71,7 +71,7 @@ object Notif {
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setColor(0xFF6366F1.toInt())
+            .setColor(0xFFE11D48.toInt())
             .setContentTitle(notice.title)
             .setContentText(notice.text)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -111,7 +111,7 @@ object Notif {
             conn.connectTimeout = 5000
             conn.readTimeout = 7000
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 ShiniTrack-App")
-            conn.setRequestProperty("Referer", "https://shinigami.asia/")
+            conn.setRequestProperty("Referer", "https://shinigami.id/")
             conn.connect()
             val input = conn.inputStream
             BitmapFactory.decodeStream(input)

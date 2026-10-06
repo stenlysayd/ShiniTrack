@@ -22,8 +22,29 @@ android {
         applicationId = "id.shinitrack.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "2002").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "0.2.2")
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1000000").toInt()
+        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0.0")
+    }
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("KEYSTORE_PATH")
+            val keystorePassword = System.getenv("KEYSTORE_PASSWORD")
+            val keyAliasStr = System.getenv("KEY_ALIAS")
+            val keyPasswordStr = System.getenv("KEY_PASSWORD")
+
+            if (keystorePath != null && keystorePassword != null && keyAliasStr != null && keyPasswordStr != null) {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = keyAliasStr
+                keyPassword = keyPasswordStr
+            } else {
+                val debugConfig = getByName("debug")
+                storeFile = debugConfig.storeFile
+                storePassword = debugConfig.storePassword
+                keyAlias = debugConfig.keyAlias
+                keyPassword = debugConfig.keyPassword
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -41,6 +62,7 @@ android {
         getByName("release") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

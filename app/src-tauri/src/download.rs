@@ -2,7 +2,7 @@
 //! skipped), progress events to the UI.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context};
@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::Serialize;
 use shinitrack_core::store::Download;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::commands::AppCtx;
@@ -111,4 +111,175 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
     };
     ctx.store.lock().unwrap().save_download(&d)?;
     Ok(d)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn is_wifi_connected() -> bool {
+    true
+}
+
+#[cfg(target_os = "android")]
+pub fn is_wifi_connected() -> bool {
+    crate::jni_bridge::is_wifi_connected().unwrap_or(false)
+}
+
+/// Background queue worker that processes download queue items sequentially.
+#[derive(Clone)]
+pub struct QueueWorker {
+    paused: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl Default for QueueWorker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QueueWorker {
+    pub fn new() -> Self {
+        Self {
+            paused: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+        self.notify.notify_one();
+        self.notify.notify_waiters();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    pub fn wake(&self) {
+        self.notify.notify_one();
+    }
+
+    pub fn start<R: Runtime>(&self, app: &AppHandle<R>) {
+        let worker = self.clone();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            worker.run_loop(app).await;
+        });
+    }
+
+    async fn run_loop<R: Runtime>(&self, app: AppHandle<R>) {
+        log::info!("Download queue worker loop started");
+        loop {
+            // Check if paused
+            if self.paused.load(Ordering::SeqCst) {
+                self.notify.notified().await;
+                continue;
+            }
+
+            // Fetch next pending item from store
+            let next_item = {
+                let ctx = app.state::<AppCtx>();
+                let store = ctx.store.lock().unwrap();
+                match store.queue_next_pending() {
+                    Ok(item) => item,
+                    Err(e) => {
+                        log::error!("Failed to fetch next pending queue item: {e}");
+                        None
+                    }
+                }
+            };
+
+            let Some(item) = next_item else {
+                // No pending items, wait for wake notification
+                self.notify.notified().await;
+                continue;
+            };
+
+            // If paused while waiting/fetching, wait
+            if self.paused.load(Ordering::SeqCst) {
+                self.notify.notified().await;
+                continue;
+            }
+
+            // Check Wi-Fi only preference: if "1", check network type.
+            // On Android, use JNI to query ConnectivityManager. If not Wi-Fi, skip and emit queue-wifi-wait event.
+            // On desktop, always proceed.
+            let wifi_only = {
+                let ctx = app.state::<AppCtx>();
+                let store = ctx.store.lock().unwrap();
+                store
+                    .kv_get("pref.dl.wifi_only")
+                    .ok()
+                    .flatten()
+                    .map(|v| v == "1")
+                    .unwrap_or(false)
+            };
+            if wifi_only && !is_wifi_connected() {
+                log::info!("Download queue waiting for Wi-Fi connection");
+                let _ = app.emit("queue-wifi-wait", ());
+                tokio::select! {
+                    _ = self.notify.notified() => {},
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {},
+                }
+                continue;
+            }
+
+            // Mark status as downloading
+            {
+                let ctx = app.state::<AppCtx>();
+                let store = ctx.store.lock().unwrap();
+                let _ = store.queue_update_status(&item.chapter_id, "downloading");
+            }
+            let _ = app.emit("queue-changed", ());
+
+            // Execute download
+            match download_chapter(&app, &item.chapter_id).await {
+                Ok(d) => {
+                    log::info!("Chapter {} downloaded successfully", item.chapter_id);
+                    {
+                        let ctx = app.state::<AppCtx>();
+                        let store = ctx.store.lock().unwrap();
+                        let _ = store.queue_update_status(&item.chapter_id, "done");
+                        let _ = store.save_download(&d);
+                        let _ = store.queue_remove(&item.chapter_id);
+                    }
+                    let _ = app.emit("queue-changed", ());
+                }
+                Err(e) => {
+                    log::warn!("Chapter {} download failed: {e}", item.chapter_id);
+                    {
+                        let ctx = app.state::<AppCtx>();
+                        let store = ctx.store.lock().unwrap();
+                        let _ = store.queue_update_status(&item.chapter_id, "error");
+                    }
+                    let _ = app.emit("queue-changed", ());
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_queue_worker_state() {
+        let worker = QueueWorker::new();
+        assert!(!worker.is_paused());
+        worker.pause();
+        assert!(worker.is_paused());
+        worker.resume();
+        assert!(!worker.is_paused());
+        worker.wake();
+    }
+
+    #[test]
+    fn test_is_wifi_connected_desktop() {
+        assert!(is_wifi_connected());
+    }
 }

@@ -1,19 +1,21 @@
 //! `#[tauri::command]`s called from the UI.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::{Duration, Local, NaiveDate, Utc};
-use serde::Serialize;
-use shinitrack_core::models::{ChapterDetail, ChapterItem, Manga, Meta};
+use serde::{Deserialize, Serialize};
+use shinitrack_core::detect::is_newer;
+use shinitrack_core::models::{ChapterDetail, ChapterEvent, ChapterItem, Manga, Meta};
 use shinitrack_core::predict::{predict, Prediction};
-use shinitrack_core::store::{Favorite, StoredEvent, Store};
+use shinitrack_core::store::{Category, CategoryWithCount, Favorite, LibraryRow, QueueItem, StoredEvent, Store};
 use shinitrack_core::ShinigamiClient;
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::backend::{self, Notice, ServerClient, Settings};
+use crate::download::QueueWorker;
 
 pub type CmdResult<T> = Result<T, String>;
 
@@ -172,6 +174,7 @@ pub async fn chapters(ctx: State<'_, AppCtx>, manga_id: String, page: Option<u32
         .map_err(err)?;
     let store = ctx.store.lock().unwrap();
     store.save_history(&p.items).map_err(err)?;
+    store.save_chapters(&p.items).map_err(err)?;
     let downloaded = store.downloaded_chapter_ids(&manga_id).map_err(err)?;
     Ok(ChapterList { items: p.items, meta: p.meta, downloaded })
 }
@@ -259,6 +262,127 @@ pub async fn refresh_all(ctx: State<'_, AppCtx>) -> CmdResult<usize> {
         }
     }
     Ok(ok)
+}
+
+#[derive(Clone, Serialize)]
+pub struct LibraryUpdateProgress {
+    pub current: usize,
+    pub total: usize,
+    pub manga_id: String,
+    pub title: String,
+}
+
+#[tauri::command]
+pub async fn library_update<R: Runtime>(
+    app: AppHandle<R>,
+    ctx: State<'_, AppCtx>,
+) -> CmdResult<usize> {
+    let favs = ctx.store.lock().unwrap().list_favorites().map_err(err)?;
+    let total = favs.len();
+    if total == 0 {
+        return Ok(0);
+    }
+
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
+    let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ok_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let mut set = tokio::task::JoinSet::new();
+
+    for fav in favs {
+        let sem = std::sync::Arc::clone(&sem);
+        let api = ctx.api.clone();
+        let app_handle = app.clone();
+        let progress_counter = std::sync::Arc::clone(&progress_counter);
+        let ok_counter = std::sync::Arc::clone(&ok_counter);
+        let notices = std::sync::Arc::clone(&notices);
+
+        set.spawn(async move {
+            let _permit = sem.acquire().await.ok()?;
+            let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let _ = app_handle.emit(
+                "library-update-progress",
+                LibraryUpdateProgress {
+                    current,
+                    total,
+                    manga_id: fav.manga_id.clone(),
+                    title: fav.title.clone(),
+                },
+            );
+
+            match api.chapters(&fav.manga_id, 1, 30).await {
+                Ok(page) => {
+                    let ctx = app_handle.state::<AppCtx>();
+                    {
+                        let store = ctx.store.lock().unwrap();
+                        let _ = store.save_chapters(&page.items);
+                        let _ = store.save_history(&page.items);
+                        let seen = fav.last_seen();
+                        for ch in &page.items {
+                            let m = Manga {
+                                manga_id: fav.manga_id.clone(),
+                                title: fav.title.clone(),
+                                alternative_title: None,
+                                description: None,
+                                cover_image_url: None,
+                                cover_portrait_url: fav.cover.clone(),
+                                latest_chapter_id: Some(ch.chapter_id.clone()),
+                                latest_chapter_number: Some(ch.chapter_number),
+                                latest_chapter_time: ch.release_date,
+                                status: None,
+                                bookmark_count: None,
+                                country_id: None,
+                                taxonomy: HashMap::new(),
+                            };
+                            if is_newer(&m, &seen) {
+                                let ev = ChapterEvent {
+                                    manga_id: fav.manga_id.clone(),
+                                    title: fav.title.clone(),
+                                    cover: fav.cover.clone(),
+                                    chapter_id: ch.chapter_id.clone(),
+                                    chapter_number: ch.chapter_number,
+                                    released_at: ch.release_date,
+                                };
+                                if let Ok(Some(n)) = backend::accept_event(&store, &ev) {
+                                    notices.lock().unwrap().push(n);
+                                }
+                            }
+                        }
+                    }
+                    ok_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                Err(e) => {
+                    log::warn!("library_update failed for {}: {e}", fav.manga_id);
+                }
+            }
+
+            Some(())
+        });
+    }
+
+    while let Some(_) = set.join_next().await {}
+
+    ctx.store
+        .lock()
+        .unwrap()
+        .kv_set("last_library_update", &Utc::now().to_rfc3339())
+        .map_err(err)?;
+
+    let notices_vec = notices.lock().unwrap().clone();
+    show_notices(&app, &notices_vec);
+
+    let ok = ok_counter.load(std::sync::atomic::Ordering::SeqCst);
+    Ok(ok)
+}
+
+#[tauri::command]
+pub fn get_last_library_update(ctx: State<'_, AppCtx>) -> CmdResult<Option<String>> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .kv_get("last_library_update")
+        .map_err(err)
 }
 
 // ------------------------------------------------------------------- schedule
@@ -402,6 +526,79 @@ pub async fn settings_set(ctx: State<'_, AppCtx>, settings: Settings) -> CmdResu
 }
 
 #[tauri::command]
+pub async fn pref_get_all(ctx: State<'_, AppCtx>) -> CmdResult<HashMap<String, String>> {
+    let map = ctx
+        .store
+        .lock()
+        .unwrap()
+        .kv_get_prefix("pref.")
+        .map_err(err)?;
+    
+    let mut prefs = HashMap::new();
+    for (k, v) in map {
+        if let Some(stripped) = k.strip_prefix("pref.") {
+            prefs.insert(stripped.to_string(), v);
+        }
+    }
+    Ok(prefs)
+}
+
+#[tauri::command]
+pub async fn pref_set(
+    ctx: State<'_, AppCtx>,
+    worker: State<'_, QueueWorker>,
+    key: String,
+    value: String,
+) -> CmdResult<()> {
+    let db_key = format!("pref.{}", key);
+    ctx.store
+        .lock()
+        .unwrap()
+        .kv_set(&db_key, &value)
+        .map_err(err)?;
+    if key == "dl.wifi_only" {
+        worker.wake();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_worker_interval(ctx: State<'_, AppCtx>, interval: String) -> CmdResult<()> {
+    let db_key = "pref.lib.update_interval";
+    ctx.store
+        .lock()
+        .unwrap()
+        .kv_set(db_key, &interval)
+        .map_err(err)?;
+    log::info!("Background worker interval updated: {}", interval);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_keep_awake(ctx: State<'_, AppCtx>, keep: bool) -> CmdResult<()> {
+    let val = if keep { "1" } else { "0" };
+    ctx.store
+        .lock()
+        .unwrap()
+        .kv_set("pref.reader.keep_awake", val)
+        .map_err(err)?;
+    log::info!("Screen keep awake set to {}", keep);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_secure_screen(ctx: State<'_, AppCtx>, secure: bool) -> CmdResult<()> {
+    let val = if secure { "1" } else { "0" };
+    ctx.store
+        .lock()
+        .unwrap()
+        .kv_set("pref.sec.secure_screen_active", val)
+        .map_err(err)?;
+    log::info!("Secure screen flag updated: {}", secure);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn test_notification<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
     show_notices(
         &app,
@@ -450,8 +647,8 @@ pub async fn open_chapter(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResu
             Err(e) => return Err(err(e)),
         },
     };
-    if let Some(d) = detail {
-        return Ok(ReaderChapter {
+    let res = if let Some(d) = detail {
+        ReaderChapter {
             chapter_id: d.chapter_id.clone(),
             manga_id: d.manga_id.clone(),
             chapter_number: d.chapter_number,
@@ -459,26 +656,63 @@ pub async fn open_chapter(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResu
             prev_chapter_id: d.prev_chapter_id.clone(),
             next_chapter_id: d.next_chapter_id.clone(),
             offline: dl.is_some(),
-        });
+        }
+    } else {
+        // Offline: list files from the download directory.
+        let d = dl.expect("checked above");
+        let mut pages: Vec<String> = std::fs::read_dir(&d.dir)
+            .map_err(err)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with(".part"))
+            .collect();
+        pages.sort();
+        ReaderChapter {
+            chapter_id: d.chapter_id,
+            manga_id: d.manga_id,
+            chapter_number: d.chapter_number,
+            pages,
+            prev_chapter_id: None,
+            next_chapter_id: None,
+            offline: true,
+        }
+    };
+
+    // Check pref.dl.delete_after_read
+    let dir_to_delete = {
+        let store = ctx.store.lock().unwrap();
+        let delete_after_read = store
+            .kv_get("pref.dl.delete_after_read")
+            .ok()
+            .flatten()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        if delete_after_read {
+            if let Ok(Some(prev)) = store.get_last_reading_progress(&res.manga_id) {
+                if prev.chapter_id != res.chapter_id {
+                    if let Ok(Some(d)) = store.get_download(&prev.chapter_id) {
+                        let _ = store.delete_download(&prev.chapter_id);
+                        Some((prev.chapter_id, d.dir))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some((prev_cid, dir)) = dir_to_delete {
+        let _ = std::fs::remove_dir_all(&dir);
+        log::info!("Deleted previous chapter download {} at {:?}", prev_cid, dir);
     }
-    // Offline: list files from the download directory.
-    let d = dl.expect("checked above");
-    let mut pages: Vec<String> = std::fs::read_dir(&d.dir)
-        .map_err(err)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.ends_with(".part"))
-        .collect();
-    pages.sort();
-    Ok(ReaderChapter {
-        chapter_id: d.chapter_id,
-        manga_id: d.manga_id,
-        chapter_number: d.chapter_number,
-        pages,
-        prev_chapter_id: None,
-        next_chapter_id: None,
-        offline: true,
-    })
+
+    Ok(res)
 }
 
 #[tauri::command]
@@ -591,11 +825,18 @@ pub fn save_reading_progress(
     chapter_id: String,
     chapter_number: f64,
     last_page: u32,
+    read_duration: u64,
 ) -> CmdResult<()> {
     ctx.store
         .lock()
         .unwrap()
-        .save_reading_progress(&manga_id, &chapter_id, chapter_number, last_page)
+        .save_reading_progress(
+            &manga_id,
+            &chapter_id,
+            chapter_number,
+            last_page,
+            read_duration,
+        )
         .map_err(err)
 }
 
@@ -650,6 +891,33 @@ pub fn mark_chapter_read(
 }
 
 #[tauri::command]
+pub fn list_bookmarked_chapters(
+    ctx: State<'_, AppCtx>,
+    manga_id: String,
+) -> CmdResult<HashSet<String>> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .list_bookmarked_chapter_ids(&manga_id)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn set_chapter_bookmark(
+    ctx: State<'_, AppCtx>,
+    manga_id: String,
+    chapter_id: String,
+    chapter_number: f64,
+    bookmarked: bool,
+) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .set_chapter_bookmark(&manga_id, &chapter_id, chapter_number, bookmarked)
+        .map_err(err)
+}
+
+#[tauri::command]
 pub fn mark_chapters_batch(
     ctx: State<'_, AppCtx>,
     manga_id: String,
@@ -690,7 +958,708 @@ pub fn get_reading_history(
         .map_err(err)
 }
 
+#[tauri::command]
+pub fn delete_history_item(
+    ctx: State<'_, AppCtx>,
+    manga_id: String,
+    chapter_id: String,
+) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .delete_history_item(&manga_id, &chapter_id)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn search_history(
+    ctx: State<'_, AppCtx>,
+    query: String,
+    limit: Option<u32>,
+) -> CmdResult<Vec<shinitrack_core::store::HistoryItem>> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .search_history(&query, limit.unwrap_or(200))
+        .map_err(err)
+}
+
+// ---------------------------------------------------------------- categories
+
+#[tauri::command]
+pub fn category_list(ctx: State<'_, AppCtx>) -> CmdResult<Vec<CategoryWithCount>> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .list_categories_with_count()
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn category_create(ctx: State<'_, AppCtx>, name: String) -> CmdResult<Category> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .create_category(&name)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn category_rename(ctx: State<'_, AppCtx>, id: i64, name: String) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .rename_category(id, &name)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn category_delete(ctx: State<'_, AppCtx>, id: i64) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .delete_category(id)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn category_reorder(ctx: State<'_, AppCtx>, ids: Vec<i64>) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .reorder_categories(&ids)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn set_manga_categories(
+    ctx: State<'_, AppCtx>,
+    manga_id: String,
+    category_ids: Vec<i64>,
+) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .set_manga_categories(&manga_id, &category_ids)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn get_manga_categories(ctx: State<'_, AppCtx>, manga_id: String) -> CmdResult<Vec<i64>> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .get_manga_categories(&manga_id)
+        .map_err(err)
+}
+
 /// Used by `lib.rs` when the app is opened from a notification / resumed.
 pub fn ctx<R: Runtime>(app: &AppHandle<R>) -> State<'_, AppCtx> {
     app.state::<AppCtx>()
 }
+
+#[tauri::command]
+pub fn library_list(
+    ctx: State<'_, AppCtx>,
+    category: i64,
+    sort: String,
+    sort_desc: bool,
+    filter_downloaded: i64,
+    filter_unread: i64,
+    filter_started: i64,
+    filter_completed: i64,
+    search: Option<String>,
+    limit: i64,
+    offset: i64,
+) -> CmdResult<Vec<LibraryRow>> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .library_page(
+            category,
+            &sort,
+            sort_desc,
+            filter_downloaded,
+            filter_unread,
+            filter_started,
+            filter_completed,
+            search.as_deref(),
+            limit,
+            offset,
+        )
+        .map_err(err)
+}
+
+// -------------------------------------------------------- data & storage (3.9)
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(meta) = p.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageInfo {
+    pub data_dir: String,
+    pub cache_bytes: u64,
+    pub downloads_bytes: u64,
+    pub database_bytes: u64,
+    pub total_used_bytes: u64,
+    pub last_backup: Option<String>,
+}
+
+#[tauri::command]
+pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
+    let data_dir = ctx.dir.to_string_lossy().into_owned();
+    let cache_bytes = dir_size(&ctx.dir.join("cache"));
+    let downloads_bytes = dir_size(&ctx.dir.join("downloads"));
+
+    let db_path = backend::db_path(&ctx.dir);
+    let mut database_bytes = db_path.metadata().map(|m| m.len()).unwrap_or(0);
+    if let Ok(m) = db_path.with_extension("db-wal").metadata() {
+        database_bytes += m.len();
+    }
+    if let Ok(m) = db_path.with_extension("db-shm").metadata() {
+        database_bytes += m.len();
+    }
+
+    let total_used_bytes = cache_bytes + downloads_bytes + database_bytes;
+    let store = ctx.store.lock().unwrap();
+    let last_backup = store.kv_get("pref.storage.last_backup").ok().flatten();
+
+    Ok(StorageInfo {
+        data_dir,
+        cache_bytes,
+        downloads_bytes,
+        database_bytes,
+        total_used_bytes,
+        last_backup,
+    })
+}
+
+#[tauri::command]
+pub async fn clear_cache(ctx: State<'_, AppCtx>, target: Option<String>) -> CmdResult<u64> {
+    let mut freed = 0u64;
+    let t = target.as_deref().unwrap_or("all");
+
+    if t == "all" || t == "chapters" || t == "chapter" {
+        ctx.chapter_cache.lock().unwrap().clear();
+        let p = ctx.dir.join("cache").join("chapters");
+        if p.exists() {
+            freed += dir_size(&p);
+            let _ = std::fs::remove_dir_all(&p);
+            let _ = std::fs::create_dir_all(&p);
+        }
+    }
+    if t == "all" || t == "covers" || t == "cover" || t == "img" {
+        let p = ctx.dir.join("cache").join("img");
+        if p.exists() {
+            freed += dir_size(&p);
+            let _ = std::fs::remove_dir_all(&p);
+            let _ = std::fs::create_dir_all(&p);
+        }
+    }
+    if t == "all" {
+        let p = ctx.dir.join("cache");
+        if p.exists() {
+            let s = dir_size(&p);
+            if s > freed {
+                freed = s;
+            }
+            let _ = std::fs::remove_dir_all(&p);
+            let _ = std::fs::create_dir_all(&p);
+        }
+    }
+    log::info!("Cleared cache (target={}): freed {} bytes", t, freed);
+    Ok(freed)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupData {
+    pub version: u32,
+    pub created_at: String,
+    #[serde(default)]
+    pub favorites: Vec<Favorite>,
+    #[serde(default)]
+    pub categories: Vec<Category>,
+    #[serde(default)]
+    pub manga_categories: Vec<(String, Vec<i64>)>,
+    #[serde(default)]
+    pub reading_progress: Vec<shinitrack_core::store::ReadingProgress>,
+    #[serde(default)]
+    pub chapter_read: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub prefs: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupResult {
+    pub file_path: String,
+    pub created_at: String,
+    pub favorites_count: usize,
+    pub categories_count: usize,
+    pub json: String,
+}
+
+pub fn cleanup_old_backups(backup_dir: &Path, keep_count: usize) {
+    let Ok(entries) = std::fs::read_dir(backup_dir) else { return; };
+    let mut backup_files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("shinitrack_backup_") && name.ends_with(".json") {
+                    let mtime = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    backup_files.push((mtime, path));
+                }
+            }
+        }
+    }
+    backup_files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.file_name().cmp(&a.1.file_name())));
+    if backup_files.len() > keep_count {
+        for (_, old_file) in &backup_files[keep_count..] {
+            let _ = std::fs::remove_file(old_file);
+        }
+    }
+}
+
+pub fn create_backup_internal(
+    dir: &Path,
+    store: &Store,
+    include_token: Option<bool>,
+) -> anyhow::Result<BackupResult> {
+    let favorites = store.list_favorites()?;
+    let cat_with_count = store.list_categories_with_count()?;
+    let categories: Vec<Category> = cat_with_count
+        .into_iter()
+        .map(|c| c.category)
+        .collect();
+
+    let mut manga_categories = Vec::new();
+    let mut chapter_read = HashMap::new();
+    for f in &favorites {
+        if let Ok(cats) = store.get_manga_categories(&f.manga_id) {
+            if !cats.is_empty() {
+                manga_categories.push((f.manga_id.clone(), cats));
+            }
+        }
+        if let Ok(reads) = store.list_read_chapter_ids(&f.manga_id) {
+            if !reads.is_empty() {
+                chapter_read.insert(f.manga_id.clone(), reads.into_iter().collect());
+            }
+        }
+    }
+
+    let reading_map = store.list_all_last_reading()?;
+    let reading_progress: Vec<shinitrack_core::store::ReadingProgress> =
+        reading_map.into_values().collect();
+
+    let include = include_token.unwrap_or(false);
+    let raw_prefs = store.kv_get_prefix("pref.")?;
+    let mut prefs: HashMap<String, String> = raw_prefs
+        .into_iter()
+        .filter(|(k, _)| include || !k.contains("token"))
+        .collect();
+    if include {
+        if let Ok(Some(tok)) = store.kv_get("server_token") {
+            if !tok.trim().is_empty() && !prefs.contains_key("pref.sync.server_token") {
+                prefs.insert("pref.sync.server_token".into(), tok);
+            }
+        }
+    }
+
+    let created_at = Utc::now().to_rfc3339();
+    let backup_data = BackupData {
+        version: 1,
+        created_at: created_at.clone(),
+        favorites,
+        categories,
+        manga_categories,
+        reading_progress,
+        chapter_read,
+        prefs,
+    };
+
+    let json = serde_json::to_string_pretty(&backup_data)?;
+    let backup_dir = dir.join("backups");
+    let _ = std::fs::create_dir_all(&backup_dir);
+    let filename = format!("shinitrack_backup_{}.json", Utc::now().format("%Y%m%d_%H%M%S"));
+    let file_path = backup_dir.join(&filename);
+    std::fs::write(&file_path, &json)?;
+
+    cleanup_old_backups(&backup_dir, 5);
+
+    let _ = store.kv_set("pref.storage.last_backup", &created_at);
+
+    Ok(BackupResult {
+        file_path: file_path.to_string_lossy().into_owned(),
+        created_at,
+        favorites_count: backup_data.favorites.len(),
+        categories_count: backup_data.categories.len(),
+        json,
+    })
+}
+
+#[tauri::command]
+pub async fn backup_create(
+    ctx: State<'_, AppCtx>,
+    include_token: Option<bool>,
+) -> CmdResult<BackupResult> {
+    let store = ctx.store.lock().unwrap();
+    create_backup_internal(&ctx.dir, &store, include_token).map_err(err)
+}
+
+pub fn backup_create_headless(dir: &Path) -> anyhow::Result<BackupResult> {
+    let store = Store::open(crate::backend::db_path(dir))?;
+    let include_token = store
+        .kv_get("pref.storage.backup_include_token")
+        .ok()
+        .flatten()
+        .map(|v| v == "1");
+    create_backup_internal(dir, &store, include_token)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreResult {
+    pub favorites_restored: usize,
+    pub categories_restored: usize,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn backup_restore(
+    ctx: State<'_, AppCtx>,
+    json: Option<String>,
+    file_path: Option<String>,
+) -> CmdResult<RestoreResult> {
+    let content = if let Some(j) = json {
+        j
+    } else if let Some(p) = file_path {
+        std::fs::read_to_string(p).map_err(err)?
+    } else {
+        return Err("No backup content provided".into());
+    };
+
+    let backup_data: BackupData = serde_json::from_str(&content).map_err(err)?;
+    let mut store = ctx.store.lock().unwrap();
+
+    let existing_cats = store.list_categories_with_count().map_err(err)?;
+    let mut cat_map: HashMap<String, i64> = existing_cats
+        .into_iter()
+        .map(|c| (c.category.name, c.category.id))
+        .collect();
+    let mut categories_restored = 0;
+
+    for cat in &backup_data.categories {
+        if !cat_map.contains_key(&cat.name) {
+            if let Ok(created) = store.create_category(&cat.name) {
+                cat_map.insert(cat.name.clone(), created.id);
+                categories_restored += 1;
+            }
+        }
+    }
+
+    let mut favorites_restored = 0;
+    for fav in &backup_data.favorites {
+        if store.upsert_favorite(fav).is_ok() {
+            favorites_restored += 1;
+        }
+    }
+
+    for (manga_id, old_cat_ids) in &backup_data.manga_categories {
+        let mut target_ids = Vec::new();
+        for old_id in old_cat_ids {
+            if let Some(old_cat) = backup_data.categories.iter().find(|c| c.id == *old_id) {
+                if let Some(new_id) = cat_map.get(&old_cat.name) {
+                    target_ids.push(*new_id);
+                }
+            } else if cat_map.values().any(|v| v == old_id) {
+                target_ids.push(*old_id);
+            }
+        }
+        if !target_ids.is_empty() {
+            let _ = store.set_manga_categories(manga_id, &target_ids);
+        }
+    }
+
+    for p in &backup_data.reading_progress {
+        let _ = store.save_reading_progress(&p.manga_id, &p.chapter_id, p.chapter_number, p.last_page, p.read_duration);
+    }
+
+    for (manga_id, ch_ids) in &backup_data.chapter_read {
+        let ch_tuples: Vec<(String, f64)> = ch_ids.iter().map(|id| (id.clone(), 0.0)).collect();
+        let _ = store.mark_chapters_read_batch(manga_id, &ch_tuples, true);
+    }
+
+    for (k, v) in &backup_data.prefs {
+        if k.starts_with("pref.") {
+            let _ = store.kv_set(k, v);
+            if k == "pref.sync.server_token" {
+                let _ = store.kv_set("server_token", v);
+            } else if k == "pref.sync.server_url" {
+                let _ = store.kv_set("server_url", v);
+            }
+        } else if k == "server_token" {
+            let _ = store.kv_set("server_token", v);
+            let _ = store.kv_set("pref.sync.server_token", v);
+        } else if k == "server_url" {
+            let _ = store.kv_set("server_url", v);
+            let _ = store.kv_set("pref.sync.server_url", v);
+        }
+    }
+
+    Ok(RestoreResult {
+        favorites_restored,
+        categories_restored,
+        message: format!(
+            "Berhasil memulihkan {} komik favorit dan {} kategori baru",
+            favorites_restored, categories_restored
+        ),
+    })
+}
+
+#[tauri::command]
+pub async fn generate_crash_log(ctx: State<'_, AppCtx>) -> CmdResult<String> {
+    let now = Utc::now().to_rfc3339();
+    let db_path = crate::backend::db_path(&ctx.dir);
+    let db_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    let fav_count = ctx
+        .store
+        .lock()
+        .unwrap()
+        .list_favorites()
+        .map(|f| f.len())
+        .unwrap_or(0);
+    let schema_version = ctx
+        .store
+        .lock()
+        .unwrap()
+        .kv_get("schema_version")
+        .unwrap_or(None)
+        .unwrap_or_else(|| "2".into());
+    let log_path = ctx.dir.join("shinitrack.log");
+    let recent_logs = if log_path.exists() {
+        std::fs::read_to_string(&log_path).unwrap_or_else(|_| "Gagal membaca berkas log.".into())
+    } else {
+        "Tidak ada rekaman log kerusakan tercatat. Sistem beroperasi normal.".into()
+    };
+
+    let report = format!(
+        "=== ShiniTrack Crash & Diagnostic Log ===\n\
+         Waktu: {}\n\
+         Aplikasi: ShiniTrack v{}\n\
+         Platform: {}\n\
+         Direktori Data: {}\n\
+         Versi Skema DB: {}\n\
+         Ukuran Basis Data: {} bytes\n\
+         Total Favorit: {}\n\n\
+         --- Log Terbaru ---\n\
+         {}\n\
+         =========================================",
+        now,
+        crate::updater::CURRENT_APP_VERSION,
+        if cfg!(target_os = "android") { "Android" } else { "Desktop" },
+        ctx.dir.display(),
+        schema_version,
+        db_size,
+        fav_count,
+        recent_logs
+    );
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn clear_reading_history(ctx: State<'_, AppCtx>) -> CmdResult<()> {
+    ctx.store.lock().unwrap().clear_reading_history().map_err(err)?;
+    log::info!("Reading history cleared");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reset_settings(ctx: State<'_, AppCtx>) -> CmdResult<()> {
+    ctx.store.lock().unwrap().reset_prefs().map_err(err)?;
+    log::info!("Preferences reset to default");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cleanup_database(ctx: State<'_, AppCtx>) -> CmdResult<()> {
+    ctx.store.lock().unwrap().cleanup_database().map_err(err)?;
+    log::info!("Database cache cleaned and vacuumed");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_statistics(ctx: State<'_, AppCtx>) -> CmdResult<shinitrack_core::store::Statistics> {
+    ctx.store.lock().unwrap().get_statistics().map_err(err)
+}
+
+// ------------------------------------------------------------- download queue
+
+#[tauri::command]
+pub async fn queue_add(
+    ctx: State<'_, AppCtx>,
+    worker: State<'_, QueueWorker>,
+    manga_id: String,
+    chapter_id: String,
+    title: String,
+    chapter_number: f64,
+) -> CmdResult<()> {
+    let item = QueueItem {
+        chapter_id,
+        manga_id,
+        title,
+        chapter_number,
+        status: "pending".into(),
+        position: -1,
+        added_at: Utc::now(),
+    };
+    ctx.store.lock().unwrap().queue_add(&item).map_err(err)?;
+    worker.wake();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn queue_list(ctx: State<'_, AppCtx>) -> CmdResult<Vec<QueueItem>> {
+    ctx.store.lock().unwrap().queue_list().map_err(err)
+}
+
+#[tauri::command]
+pub async fn queue_remove(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResult<()> {
+    ctx.store.lock().unwrap().queue_remove(&chapter_id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn queue_pause(
+    ctx: State<'_, AppCtx>,
+    worker: State<'_, QueueWorker>,
+    chapter_id: String,
+) -> CmdResult<()> {
+    if chapter_id.is_empty() || chapter_id == "all" {
+        worker.pause();
+    } else {
+        ctx.store
+            .lock()
+            .unwrap()
+            .queue_update_status(&chapter_id, "paused")
+            .map_err(err)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn queue_resume(
+    ctx: State<'_, AppCtx>,
+    worker: State<'_, QueueWorker>,
+    chapter_id: String,
+) -> CmdResult<()> {
+    if chapter_id.is_empty() || chapter_id == "all" {
+        worker.resume();
+    } else {
+        ctx.store
+            .lock()
+            .unwrap()
+            .queue_update_status(&chapter_id, "pending")
+            .map_err(err)?;
+        worker.resume();
+    }
+    worker.wake();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn queue_reorder(ctx: State<'_, AppCtx>, chapter_ids: Vec<String>) -> CmdResult<()> {
+    ctx.store.lock().unwrap().queue_reorder(&chapter_ids).map_err(err)
+}
+
+#[tauri::command]
+pub async fn queue_clear(ctx: State<'_, AppCtx>) -> CmdResult<()> {
+    ctx.store.lock().unwrap().queue_clear_done().map_err(err)
+}
+
+#[tauri::command]
+pub async fn queue_retry(
+    ctx: State<'_, AppCtx>,
+    worker: State<'_, QueueWorker>,
+    chapter_id: String,
+) -> CmdResult<()> {
+    ctx.store
+        .lock()
+        .unwrap()
+        .queue_update_status(&chapter_id, "pending")
+        .map_err(err)?;
+    worker.wake();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_backup_token_filtering() {
+        let mut raw_prefs = HashMap::new();
+        raw_prefs.insert("pref.reader.mode".to_string(), "webtoon".to_string());
+        raw_prefs.insert("pref.sync.server_token".to_string(), "secret123".to_string());
+
+        // Without token
+        let include_false = false;
+        let prefs_excluded: HashMap<String, String> = raw_prefs
+            .clone()
+            .into_iter()
+            .filter(|(k, _)| include_false || !k.contains("token"))
+            .collect();
+        assert!(prefs_excluded.contains_key("pref.reader.mode"));
+        assert!(!prefs_excluded.contains_key("pref.sync.server_token"));
+
+        // With token
+        let include_true = true;
+        let prefs_included: HashMap<String, String> = raw_prefs
+            .into_iter()
+            .filter(|(k, _)| include_true || !k.contains("token"))
+            .collect();
+        assert!(prefs_included.contains_key("pref.reader.mode"));
+        assert!(prefs_included.contains_key("pref.sync.server_token"));
+    }
+
+    #[test]
+    fn test_cleanup_old_backups() {
+        let temp_dir = std::env::temp_dir().join("shinitrack_test_backups_cleanup");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        for i in 1..=7 {
+            let file_name = format!("shinitrack_backup_20261006_00000{}.json", i);
+            let file_path = temp_dir.join(&file_name);
+            std::fs::write(&file_path, "{}").unwrap();
+        }
+
+        cleanup_old_backups(&temp_dir, 5);
+
+        let remaining: Vec<_> = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(remaining.len(), 5);
+        assert!(!remaining.contains(&"shinitrack_backup_20261006_000001.json".to_string()));
+        assert!(!remaining.contains(&"shinitrack_backup_20261006_000002.json".to_string()));
+        assert!(remaining.contains(&"shinitrack_backup_20261006_000007.json".to_string()));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}
+

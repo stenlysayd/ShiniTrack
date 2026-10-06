@@ -54,13 +54,13 @@
 
   <!-- Bottom Navigation Tab Bar (Mihon Standard) -->
   <nav class="tabbar" aria-label="Navigasi Utama">
-    <a href="#/favorites" data-tab="favorites">
+    <a href="#/library" data-tab="library">
       <span class="tab-icon">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
         </svg>
       </span>
-      <span class="tab-label">Library</span>
+      <span class="tab-label">Pustaka</span>
     </a>
     <a href="#/updates" data-tab="updates">
       <span class="tab-icon">
@@ -70,7 +70,7 @@
         </svg>
         <b id="badge" class="badge hidden">0</b>
       </span>
-      <span class="tab-label">Update</span>
+      <span class="tab-label">Pembaruan</span>
     </a>
     <a href="#/history" data-tab="history">
       <span class="tab-icon">
@@ -81,23 +81,24 @@
       </span>
       <span class="tab-label">Riwayat</span>
     </a>
-    <a href="#/search" data-tab="search">
+    <a href="#/explore" data-tab="explore">
       <span class="tab-icon">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          <circle cx="12" cy="12" r="10"></circle>
+          <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
         </svg>
       </span>
-      <span class="tab-label">Eksplor</span>
+      <span class="tab-label">Jelajahi</span>
     </a>
-    <a href="#/settings" data-tab="settings">
+    <a href="#/more" data-tab="more">
       <span class="tab-icon">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          <circle cx="12" cy="12" r="1" fill="currentColor"></circle>
+          <circle cx="19" cy="12" r="1" fill="currentColor"></circle>
+          <circle cx="5" cy="12" r="1" fill="currentColor"></circle>
         </svg>
       </span>
-      <span class="tab-label">Setelan</span>
+      <span class="tab-label">Lainnya</span>
     </a>
   </nav>
 
@@ -133,6 +134,7 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="icons.js"></script>
-  <script src="app.js"></script>
+  <script src="vendor/gsap.min.js"></script>
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>

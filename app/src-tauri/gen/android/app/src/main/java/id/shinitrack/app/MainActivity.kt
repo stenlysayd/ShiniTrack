@@ -61,6 +61,12 @@ class MainActivity : TauriActivity() {
         }
 
         try {
+            BackupWorker.schedule(this)
+        } catch (e: Throwable) {
+            Log.e(TAG, "BackupWorker.schedule failed", e)
+        }
+
+        try {
             registerUnifiedPush()
         } catch (e: Throwable) {
             Log.e(TAG, "registerUnifiedPush failed", e)

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +58,8 @@ pub struct Manga {
     pub bookmark_count: Option<i64>,
     #[serde(default)]
     pub country_id: Option<String>,
+    #[serde(default)]
+    pub taxonomy: HashMap<String, Vec<TaxonomyTerm>>,
 }
 
 impl Manga {
@@ -64,6 +68,16 @@ impl Manga {
             .clone()
             .or_else(|| self.cover_image_url.clone())
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaxonomyTerm {
+    #[serde(default)]
+    pub taxonomy_id: Option<i64>,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub name: String,
 }
 
 /// An item of `/chapter/{manga_id}/list`.

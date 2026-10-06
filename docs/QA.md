@@ -1,0 +1,21 @@
+# QA Checklist
+
+- [ ] Install application successfully
+- [ ] Open library and browse categories
+- [ ] Test global search functionality
+- [ ] Open manga detail page and verify info
+- [ ] Read manga in webtoon mode
+- [ ] Read manga in paged mode
+- [ ] Queue and download a chapter
+- [ ] Read a downloaded chapter while offline
+- [ ] Check updates tab for new chapters
+- [ ] Verify history tracking for read chapters
+- [ ] Open settings screen: General
+- [ ] Open settings screen: Reader
+- [ ] Open settings screen: Downloads
+- [ ] Open settings screen: Appearance
+- [ ] Create a backup of user data
+- [ ] Restore data from a backup
+- [ ] Receive a new chapter notification
+- [ ] Check for OTA app update in settings
+- [ ] Disable animations in settings and verify

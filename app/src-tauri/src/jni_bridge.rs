@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use jni::objects::{JByteArray, JClass, JString};
+use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::sys::{jboolean, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
@@ -104,6 +104,120 @@ pub fn request_install_permission() -> anyhow::Result<bool> {
     Ok(val.z()?)
 }
 
+pub fn is_wifi_connected() -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+
+    // Try obtaining Android Context:
+    // 1) ActivityThread.currentApplication()
+    // 2) Fallback to ShiniBridge.INSTANCE.getCurrentActivity()
+    let context = match (|| -> anyhow::Result<JObject> {
+        let act_thread_class = env.find_class("android/app/ActivityThread")?;
+        let app_obj = env
+            .call_static_method(
+                act_thread_class,
+                "currentApplication",
+                "()Landroid/app/Application;",
+                &[],
+            )?
+            .l()?;
+        if app_obj.is_null() {
+            anyhow::bail!("currentApplication is null");
+        }
+        Ok(app_obj)
+    })() {
+        Ok(ctx) => ctx,
+        Err(_) => {
+            let _ = env.exception_clear();
+            let bridge_class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+            let instance = env
+                .get_static_field(
+                    &bridge_class,
+                    "INSTANCE",
+                    "Lid/shinitrack/app/ShiniBridge;",
+                )?
+                .l()?;
+            let act = env
+                .call_method(
+                    instance,
+                    "getCurrentActivity",
+                    "()Landroid/app/Activity;",
+                    &[],
+                )?
+                .l()?;
+            if act.is_null() {
+                anyhow::bail!("No Android context available");
+            }
+            act
+        }
+    };
+
+    // Get ConnectivityManager: context.getSystemService("connectivity")
+    let service_name = env.new_string("connectivity")?;
+    let cm = env
+        .call_method(
+            &context,
+            "getSystemService",
+            "(Ljava/lang/String;)Ljava/lang/Object;",
+            &[(&service_name).into()],
+        )?
+        .l()?;
+    if cm.is_null() {
+        return Ok(false);
+    }
+
+    // Try API 23+ getActiveNetwork -> getNetworkCapabilities -> hasTransport(TRANSPORT_WIFI = 1)
+    let has_wifi_caps = (|| -> anyhow::Result<bool> {
+        let active_net = env
+            .call_method(&cm, "getActiveNetwork", "()Landroid/net/Network;", &[])?
+            .l()?;
+        if active_net.is_null() {
+            return Ok(false);
+        }
+        let caps = env
+            .call_method(
+                &cm,
+                "getNetworkCapabilities",
+                "(Landroid/net/Network;)Landroid/net/NetworkCapabilities;",
+                &[(&active_net).into()],
+            )?
+            .l()?;
+        if caps.is_null() {
+            return Ok(false);
+        }
+        // NetworkCapabilities.TRANSPORT_WIFI = 1
+        let has_wifi = env
+            .call_method(&caps, "hasTransport", "(I)Z", &[1.into()])?
+            .z()?;
+        Ok(has_wifi)
+    })();
+
+    if let Ok(res) = has_wifi_caps {
+        return Ok(res);
+    }
+    let _ = env.exception_clear();
+
+    // Fallback for older APIs: cm.getActiveNetworkInfo() -> isConnected() && getType() == TYPE_WIFI (1)
+    let net_info = env
+        .call_method(
+            &cm,
+            "getActiveNetworkInfo",
+            "()Landroid/net/NetworkInfo;",
+            &[],
+        )?
+        .l()?;
+    if net_info.is_null() {
+        return Ok(false);
+    }
+    let is_connected = env.call_method(&net_info, "isConnected", "()Z", &[])?.z()?;
+    if !is_connected {
+        return Ok(false);
+    }
+    let net_type = env.call_method(&net_info, "getType", "()I", &[])?.i()?;
+    // ConnectivityManager.TYPE_WIFI = 1
+    Ok(net_type == 1)
+}
+
 pub fn show_native_notification(notice: &backend::Notice) -> anyhow::Result<()> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
@@ -171,3 +285,32 @@ pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeRegisterEndpoint
         }
     }
 }
+
+/// Periodic auto-backup triggered by WorkManager BackupWorker.
+#[no_mangle]
+pub extern "system" fn Java_id_shinitrack_app_BackupWorker_triggerBackup(
+    mut env: JNIEnv,
+    _this: JObject,
+    data_dir: JString,
+) -> jboolean {
+    init_logging();
+    let Some(dir) = get_string(&mut env, &data_dir) else {
+        return JNI_FALSE;
+    };
+    match crate::commands::backup_create_headless(&PathBuf::from(dir)) {
+        Ok(res) => {
+            log::info!(
+                "BackupWorker completed: {} (favs: {}, cats: {})",
+                res.file_path,
+                res.favorites_count,
+                res.categories_count
+            );
+            JNI_TRUE
+        }
+        Err(e) => {
+            log::error!("BackupWorker backup failed: {e:#}");
+            JNI_FALSE
+        }
+    }
+}
+
