@@ -63,3 +63,14 @@ Perintah verifikasi: `cargo check --workspace --all-targets`
 Output nyata:
     Checking shinitrack-app v1.0.1 (C:\Users\MSI15\Pictures\New folder (2)\shinitrack\app\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.91s
+
+## T2: In-app update: app keluar sendiri saat bar 100%
+Status: DONE
+File yang diubah: ShiniBridge.kt, AndroidManifest.xml, file_paths.xml, jni_bridge.rs, updater.rs
+
+Perintah verifikasi: `cargo check --workspace --all-targets`
+Output nyata:
+    Checking shinitrack-app v1.0.1 (C:\Users\MSI15\Pictures\New folder (2)\shinitrack\app\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.62s
+    
+Uji manual tersisa: PERLU UJI DI HP

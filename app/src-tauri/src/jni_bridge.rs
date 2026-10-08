@@ -69,22 +69,52 @@ pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<crate::updater::Ins
     let mut env = vm.attach_current_thread()?;
     let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
     let j_path = env.new_string(apk_path)?;
-    let val = env.call_static_method(
+    let val_res = env.call_static_method(
         class,
         "triggerInstallApk",
         "(Ljava/lang/String;)Ljava/lang/String;",
         &[(&j_path).into()],
-    )?;
+    );
+    if env.exception_check()? {
+        env.exception_describe()?;
+        env.exception_clear()?;
+        anyhow::bail!("exception Java saat install");
+    }
+    let val = val_res?;
     let j_str: JString = val.l()?.into();
-    let json = get_string(&mut env, &j_str).unwrap_or_default();
-    let outcome: crate::updater::InstallOutcome = serde_json::from_str(&json).unwrap_or(
+    let res_str = get_string(&mut env, &j_str).unwrap_or_default();
+    
+    let outcome = if res_str == "OK" {
+        crate::updater::InstallOutcome {
+            success: true,
+            needs_permission: false,
+            message: "Membuka penginstal paket Android...".into(),
+            file_path: apk_path.to_string(),
+        }
+    } else if res_str == "NEED_PERMISSION" {
+        crate::updater::InstallOutcome {
+            success: false,
+            needs_permission: true,
+            message: "Izinkan pemasangan dari ShiniTrack di pengaturan, lalu coba lagi".into(),
+            file_path: apk_path.to_string(),
+        }
+    } else if res_str.starts_with("ERR:") {
+        let msg = res_str.strip_prefix("ERR:").unwrap_or(&res_str);
+        crate::updater::append_log(&format!("Install error: {}", msg));
         crate::updater::InstallOutcome {
             success: false,
             needs_permission: false,
-            message: "Gagal memproses hasil instalasi".into(),
+            message: msg.to_string(),
             file_path: apk_path.to_string(),
-        },
-    );
+        }
+    } else {
+        crate::updater::InstallOutcome {
+            success: false,
+            needs_permission: false,
+            message: "Respons tidak dikenali".into(),
+            file_path: apk_path.to_string(),
+        }
+    };
     Ok(outcome)
 }
 

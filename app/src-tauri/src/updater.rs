@@ -188,6 +188,16 @@ pub fn mock_update_info(current_version: &str) -> UpdateInfo {
     }
 }
 
+pub fn append_log(msg: &str) {
+    if let Some(dir) = crate::backend::data_dir_override() {
+        let log_path = dir.join("shinitrack.log");
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            use std::io::Write;
+            let _ = writeln!(file, "[{}] {}", chrono::Local::now().to_rfc3339(), msg);
+        }
+    }
+}
+
 pub async fn download_and_install_apk<R: Runtime>(
     app: &AppHandle<R>,
     download_url: &str,
@@ -205,8 +215,14 @@ pub async fn download_and_install_apk<R: Runtime>(
     let updates_dir = cache_dir.join("updates");
     tokio::fs::create_dir_all(&updates_dir).await?;
     let target_path = updates_dir.join("shinitrack-update.apk");
+    let part_path = updates_dir.join("shinitrack-update.apk.part");
 
-    let mut file = tokio::fs::File::create(&target_path).await?;
+    let _ = tokio::fs::remove_file(&target_path).await;
+    let _ = tokio::fs::remove_file(&part_path).await;
+
+    crate::updater::append_log("Mulai unduh APK pembaruan");
+
+    let mut file = tokio::fs::File::create(&part_path).await?;
     let mut downloaded: u64 = 0;
     let mut last_progress: u8 = 255;
 
@@ -214,11 +230,12 @@ pub async fn download_and_install_apk<R: Runtime>(
         tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
         downloaded += chunk.len() as u64;
         let progress = if total_size > 0 {
-            ((downloaded as f64 / total_size as f64) * 100.0).min(100.0) as u8
+            ((downloaded as f64 / total_size as f64) * 100.0) as u8
         } else {
             0
         };
-        if progress != last_progress || downloaded >= total_size {
+        let progress = progress.min(99);
+        if progress != last_progress {
             last_progress = progress;
             let _ = app.emit(
                 "update-download-progress",
@@ -233,11 +250,34 @@ pub async fn download_and_install_apk<R: Runtime>(
     tokio::io::AsyncWriteExt::flush(&mut file).await?;
     drop(file);
 
+    if total_size > 0 && downloaded != total_size {
+        crate::updater::append_log("Unduhan APK gagal: ukuran tidak cocok");
+        anyhow::bail!("Ukuran unduhan tidak cocok");
+    }
+
+    tokio::fs::rename(&part_path, &target_path).await?;
+
+    let _ = app.emit(
+        "update-download-progress",
+        DownloadProgressPayload {
+            progress: 100,
+            downloaded_bytes: downloaded,
+            total_bytes: total_size,
+        },
+    );
+
+    crate::updater::append_log("Unduhan APK selesai");
+
     let path_str = target_path.to_string_lossy().into_owned();
     log::info!("Update APK downloaded to: {path_str}");
 
+    crate::updater::append_log("Mulai install APK");
+
     let mut outcome = install_apk_file(&path_str)?;
     outcome.file_path = path_str;
+
+    crate::updater::append_log(&format!("Hasil install APK: success={}, msg={}", outcome.success, outcome.message));
+
     Ok(outcome)
 }
 
