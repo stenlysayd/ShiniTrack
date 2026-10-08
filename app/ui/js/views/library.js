@@ -116,22 +116,27 @@ export async function renderFavorites(opts = {}) {
       loading = false;
     }
 
+    // IntersectionObserver for infinite scroll
+    const sentinel = document.getElementById('lib-sentinel');
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && !loading && !allLoaded) {
+        loadPage();
+      }
+    }, { rootMargin: '200px' });
+
     function resetAndLoad() {
+      if (sentinel) observer.unobserve(sentinel);
       currentOffset = 0;
       allLoaded = false;
       loading = false;
       gridWrap.innerHTML = '';
-      loadPage(true);
+      loadPage(true).finally(() => {
+        if (sentinel && !allLoaded) observer.observe(sentinel);
+      });
     }
 
-    // IntersectionObserver for infinite scroll
-    const sentinel = document.getElementById('lib-sentinel');
-    const observer = new IntersectionObserver(entries => {
-      if (entries[0].isIntersecting) loadPage();
-    }, { rootMargin: '200px' });
-    observer.observe(sentinel);
-
     await loadPage();
+    if (sentinel && !allLoaded) observer.observe(sentinel);
     attachEvents(totalList, categories, mangaCatMap, gridWrap, resetAndLoad);
   } catch (err) {
     viewEl.innerHTML = `<div class="empty">${Icons.alertTriangle()}<h3>Gagal Memuat Library</h3><p>${err}</p></div>`;
@@ -139,14 +144,22 @@ export async function renderFavorites(opts = {}) {
 }
 
 function appendCards(rows, container) {
+  // Deduplicate against already rendered items to prevent clone cards
+  const existingIds = new Set();
+  container.querySelectorAll('[data-id]').forEach(el => {
+    if (el.dataset.id) existingIds.add(el.dataset.id);
+  });
+  const filteredRows = rows.filter(r => !existingIds.has(r.manga_id));
+  if (!filteredRows.length) return;
+
   // Convert LibraryRow to a shape renderCards expects
   const fakeReadingMap = {};
   const fakeUnreadSet = new Set();
-  rows.forEach(r => {
+  filteredRows.forEach(r => {
     if (r.last_read_at) fakeReadingMap[r.manga_id] = { chapter_number: 0, updated_at: r.last_read_at };
     if (r.unread_count > 0) fakeUnreadSet.add(r.manga_id);
   });
-  const adapted = rows.map(r => ({
+  const adapted = filteredRows.map(r => ({
     manga_id: r.manga_id,
     title: r.title,
     cover: r.cover,

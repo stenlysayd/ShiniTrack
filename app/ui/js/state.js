@@ -55,6 +55,9 @@ export function getPref(key, defaultValue) {
 export async function setPref(key, value) {
   const strVal = String(value);
   state.prefs.set(key, strVal);
+  if (key === 'privacy.incognito' && typeof window.updateIncognitoUI === 'function') {
+    window.updateIncognitoUI();
+  }
   try {
     await api.pref_set({ key, value: strVal });
   } catch (e) {

@@ -20,7 +20,9 @@ async function refreshStorageInfo() {
 
     // Update location text
     const infoEls = activeContainer.querySelectorAll('.settings-info-text');
-    if (infoEls[0]) infoEls[0].textContent = `Lokasi data: ${info.data_dir}`;
+    if (infoEls[0]) {
+      infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${info.data_dir}<br/><span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">&bull; Folder Unduhan: downloads/&lt;Judul Komik&gt;/Chapter &lt;X&gt;<br/>&bull; Folder Cadangan: backups/ &amp; Unduhan Perangkat</span>`;
+    }
 
     // Update last backup text
     if (infoEls[1]) {
@@ -41,7 +43,7 @@ async function refreshStorageInfo() {
       const subEl = btn.querySelector('.s');
       if (!titleEl || !subEl) return;
       if (titleEl.textContent === 'Hapus cache bab') {
-        subEl.textContent = `Kosongkan gambar halaman bab yang tersimpan (${formatBytes(info.cache_bytes)})`;
+        subEl.textContent = `Kosongkan database bab & memori sementara (${formatBytes(info.cache_bytes)})`;
       } else if (titleEl.textContent === 'Hapus cache sampul') {
         subEl.textContent = `Kosongkan cache gambar sampul manga (Database: ${formatBytes(info.database_bytes)})`;
       }
@@ -81,7 +83,19 @@ export const penyimpananSchema = [
       try {
         const includeToken = getPref('storage.backup_include_token', '0') === '1';
         const res = await api.backup_create({ includeToken });
-        utils.showToast(`Cadangan dibuat (${res.favorites_count} komik, ${res.categories_count} kategori)`);
+        if (res.json) {
+          const blob = new Blob([res.json], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          a.href = url;
+          a.download = `shinitrack_backup_${dateStr}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        utils.showToast(`Cadangan dibuat & diunduh (${res.favorites_count} komik, ${res.categories_count} kategori)`);
         refreshStorageInfo();
       } catch (err) {
         utils.showToast(`Gagal membuat cadangan: ${err}`);
@@ -145,13 +159,14 @@ export const penyimpananSchema = [
   {
     type: 'button',
     title: 'Hapus cache bab',
-    subtitle: 'Kosongkan gambar halaman bab yang tersimpan sementara (0 MB)',
+    subtitle: 'Kosongkan database bab & memori sementara',
     icon: window.Icons && window.Icons.trash ? window.Icons.trash() : '',
     onClick: async () => {
       utils.showToast('Membersihkan cache bab...');
       try {
         const freed = await api.clear_cache({ target: 'chapters' });
-        utils.showToast(`Cache bab dibersihkan (${formatBytes(freed)})`);
+        const freedMsg = freed > 0 ? ` (${formatBytes(freed)})` : '';
+        utils.showToast(`Cache bab berhasil dibersihkan${freedMsg}`);
         refreshStorageInfo();
       } catch (err) {
         utils.showToast(`Gagal membersihkan cache: ${err}`);

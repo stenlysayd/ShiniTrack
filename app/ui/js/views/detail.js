@@ -101,10 +101,16 @@ export async function renderMangaDetail(mangaId) {
             <h2>${utils.escapeHtml(m.title)}</h2>
             <div class="alt-title">${utils.escapeHtml(m.alternative_title || '')}</div>
             <div class="detail-action-row">
-              <button id="det-fav-btn" class="detail-action-btn ${isFav ? 'is-saved' : 'primary'}">
+              <button id="det-fav-btn" class="detail-action-btn ${isFav ? 'is-saved' : 'primary'}" title="${isFav ? 'Hapus dari Pustaka' : 'Tambah ke Pustaka'}">
                 <span class="detail-action-icon">${isFav ? Icons.star('', true) : Icons.plus()}</span>
                 <span class="detail-action-text">${isFav ? 'Di pustaka' : 'Tambah'}</span>
               </button>
+              ${isFav ? `
+              <button id="det-cat-btn" class="detail-action-btn" title="Atur Kategori">
+                <span class="detail-action-icon">${Icons.tag()}</span>
+                <span class="detail-action-text">Kategori</span>
+              </button>
+              ` : ''}
               <div class="detail-action-btn detail-prediction-action" aria-label="Prediksi rilis berikutnya">
                 <span class="detail-action-icon">${Icons.clock()}</span>
                 <span class="detail-action-text">Segera</span>

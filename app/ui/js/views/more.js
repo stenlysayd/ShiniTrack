@@ -19,7 +19,7 @@ export async function renderMore() {
   container.className = 'more-container';
 
   // 1. App logo header
-  let appVersion = 'v0.2.3';
+  let appVersion = 'v1.0.1';
   try {
     const appInfo = await api.get_app_info();
     if (appInfo && appInfo.version) {

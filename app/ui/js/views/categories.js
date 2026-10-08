@@ -172,8 +172,18 @@ export async function renderCategories() {
       title: 'Tambah kategori',
       placeholder: 'Nama kategori',
       onSubmit: async (name) => {
+        const trimmed = (name || '').trim();
+        const lower = trimmed.toLowerCase();
+        if (!trimmed) {
+          showToast('Nama kategori tidak boleh kosong');
+          return;
+        }
+        if (lower === 'semua' || lower === 'bawaan') {
+          showToast("Nama 'Semua' dan 'Bawaan' adalah kategori sistem!");
+          return;
+        }
         try {
-          await api.category_create({ name });
+          await api.category_create({ name: trimmed });
           showToast('Kategori ditambahkan');
           await loadList();
         } catch (e) { showToast('Gagal: ' + e); }
@@ -242,8 +252,18 @@ export async function renderCategories() {
           placeholder: 'Nama baru',
           value: c.name,
           onSubmit: async (name) => {
+            const trimmed = (name || '').trim();
+            const lower = trimmed.toLowerCase();
+            if (!trimmed) {
+              showToast('Nama kategori tidak boleh kosong');
+              return;
+            }
+            if (lower === 'semua' || lower === 'bawaan') {
+              showToast("Nama 'Semua' dan 'Bawaan' adalah kategori sistem!");
+              return;
+            }
             try {
-              await api.category_rename({ id: c.id, name });
+              await api.category_rename({ id: c.id, name: trimmed });
               showToast('Kategori diubah');
               await loadList();
             } catch (e) { showToast('Gagal: ' + e); }

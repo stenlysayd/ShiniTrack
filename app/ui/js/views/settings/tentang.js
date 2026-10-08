@@ -167,7 +167,7 @@ export async function renderTentang() {
   if (!viewEl) return;
   viewEl.innerHTML = '';
 
-  let appInfo = { name: 'ShiniTrack', version: '0.2.3', build_code: 1, platform: 'android' };
+  let appInfo = { name: 'ShiniTrack', version: '1.0.1', build_code: 2004, platform: 'android' };
   try {
     const fetched = await api.get_app_info();
     if (fetched) appInfo = fetched;

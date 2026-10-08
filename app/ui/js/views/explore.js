@@ -82,9 +82,11 @@ export async function renderCatalogInto(container) {
       resEl.innerHTML = `
         <div class="empty">
           ${Icons.alertTriangle()}
-          <h3>Gagal Melakukan Pencarian</h3>
-          <p>${e}</p>
+          <h3>Gagal Memuat Katalog</h3>
+          <p style="margin-bottom:14px; max-width:320px;">${e}</p>
+          <button id="retry-search-btn" class="btn primary small">${Icons.sync()} Coba Lagi</button>
         </div>`;
+      document.getElementById('retry-search-btn')?.addEventListener('click', () => doSearch(query));
     }
   }
 

@@ -59,26 +59,50 @@ export function attachDetailEvents(mangaId, detail, chapters, progress, chRes = 
       });
     }
 
-    // Favorite toggle / category assign
+    // Favorite toggle
     const favBtn = document.getElementById('det-fav-btn');
     if (favBtn) {
       favBtn.addEventListener('click', async () => {
         try {
           if (detail.favorite) {
+            await api.remove_favorite({ mangaId });
+            showToast('Dihapus dari pustaka');
+            renderMangaDetail(mangaId);
+          } else {
+            await api.add_favorite({ mangaId });
+            showToast('Ditambahkan ke pustaka');
             const cats = await api.category_list().catch(() => []);
             if (cats.length) {
               const mangaCats = await api.get_manga_categories({ mangaId }).catch(() => []);
-              showCategoryAssignDialog([mangaId], cats, { [mangaId]: mangaCats }, () => showToast('Kategori disimpan'));
+              showCategoryAssignDialog([mangaId], cats, { [mangaId]: mangaCats }, () => {
+                showToast('Kategori disimpan');
+                renderMangaDetail(mangaId);
+              });
             } else {
-              await api.remove_favorite({ mangaId });
-              showToast('Dihapus dari favorit');
               renderMangaDetail(mangaId);
             }
-          } else {
-            await api.add_favorite({ mangaId });
-            showToast('Ditambahkan ke favorit');
-            renderMangaDetail(mangaId);
           }
+        } catch (e) {
+          showToast(`Error: ${e}`);
+        }
+      });
+    }
+
+    // Category assign button (when favorited)
+    const catBtn = document.getElementById('det-cat-btn');
+    if (catBtn) {
+      catBtn.addEventListener('click', async () => {
+        try {
+          const cats = await api.category_list().catch(() => []);
+          if (!cats.length) {
+            showToast('Belum ada kategori kustom. Buat di menu Lainnya > Kategori');
+            return;
+          }
+          const mangaCats = await api.get_manga_categories({ mangaId }).catch(() => []);
+          showCategoryAssignDialog([mangaId], cats, { [mangaId]: mangaCats }, () => {
+            showToast('Kategori disimpan');
+            renderMangaDetail(mangaId);
+          });
         } catch (e) {
           showToast(`Error: ${e}`);
         }

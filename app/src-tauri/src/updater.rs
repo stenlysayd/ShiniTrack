@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 pub const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const CURRENT_BUILD_CODE: u32 = 2003;
+pub const CURRENT_BUILD_CODE: u32 = 2004;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
@@ -190,6 +190,7 @@ pub async fn download_and_install_apk<R: Runtime>(
 
     let mut file = tokio::fs::File::create(&target_path).await?;
     let mut downloaded: u64 = 0;
+    let mut last_progress: u8 = 255;
 
     while let Some(chunk) = res.chunk().await? {
         tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
@@ -199,14 +200,17 @@ pub async fn download_and_install_apk<R: Runtime>(
         } else {
             0
         };
-        let _ = app.emit(
-            "update-download-progress",
-            DownloadProgressPayload {
-                progress,
-                downloaded_bytes: downloaded,
-                total_bytes: total_size,
-            },
-        );
+        if progress != last_progress || downloaded >= total_size {
+            last_progress = progress;
+            let _ = app.emit(
+                "update-download-progress",
+                DownloadProgressPayload {
+                    progress,
+                    downloaded_bytes: downloaded,
+                    total_bytes: total_size,
+                },
+            );
+        }
     }
     tokio::io::AsyncWriteExt::flush(&mut file).await?;
     drop(file);

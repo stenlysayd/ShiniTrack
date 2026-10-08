@@ -827,6 +827,19 @@ pub fn save_reading_progress(
     last_page: u32,
     read_duration: u64,
 ) -> CmdResult<()> {
+    let is_incognito = ctx
+        .store
+        .lock()
+        .unwrap()
+        .kv_get("pref.privacy.incognito")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if is_incognito {
+        log::debug!("Incognito active: skipping save_reading_progress");
+        return Ok(());
+    }
     ctx.store
         .lock()
         .unwrap()
@@ -883,6 +896,19 @@ pub fn mark_chapter_read(
     chapter_number: f64,
     read: bool,
 ) -> CmdResult<()> {
+    let is_incognito = ctx
+        .store
+        .lock()
+        .unwrap()
+        .kv_get("pref.privacy.incognito")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if is_incognito {
+        log::debug!("Incognito active: skipping mark_chapter_read");
+        return Ok(());
+    }
     ctx.store
         .lock()
         .unwrap()
@@ -924,6 +950,19 @@ pub fn mark_chapters_batch(
     chapters: Vec<(String, f64)>,
     read: bool,
 ) -> CmdResult<()> {
+    let is_incognito = ctx
+        .store
+        .lock()
+        .unwrap()
+        .kv_get("pref.privacy.incognito")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if is_incognito {
+        log::debug!("Incognito active: skipping mark_chapters_batch");
+        return Ok(());
+    }
     ctx.store
         .lock()
         .unwrap()
@@ -1153,11 +1192,20 @@ pub async fn clear_cache(ctx: State<'_, AppCtx>, target: Option<String>) -> CmdR
 
     if t == "all" || t == "chapters" || t == "chapter" {
         ctx.chapter_cache.lock().unwrap().clear();
+        let deleted_rows = ctx
+            .store
+            .lock()
+            .unwrap()
+            .clear_chapter_cache()
+            .unwrap_or(0);
         let p = ctx.dir.join("cache").join("chapters");
         if p.exists() {
             freed += dir_size(&p);
             let _ = std::fs::remove_dir_all(&p);
             let _ = std::fs::create_dir_all(&p);
+        }
+        if freed == 0 && deleted_rows > 0 {
+            freed += (deleted_rows as u64) * 512;
         }
     }
     if t == "all" || t == "covers" || t == "cover" || t == "img" {

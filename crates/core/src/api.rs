@@ -31,8 +31,8 @@ impl ShinigamiClient {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .default_headers(headers)
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(20))
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(35))
             .gzip(true)
             .build()?;
         Ok(Self {
@@ -51,25 +51,41 @@ impl ShinigamiClient {
         path: &str,
         query: &[(&str, String)],
     ) -> Result<(T, Meta)> {
-        let resp = self
-            .http
-            .get(format!("{}{}", self.base, path))
-            .query(query)
-            .send()
-            .await?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(Error::Status(status.as_u16()));
+        let mut last_err = None;
+        let url = format!("{}{}", self.base, path);
+        for attempt in 0..2 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+            }
+            let resp = match self.http.get(&url).query(query).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = Some(Error::Http(e));
+                    continue;
+                }
+            };
+            let status = resp.status();
+            if !status.is_success() {
+                last_err = Some(Error::Status(status.as_u16()));
+                continue;
+            }
+            let env: Envelope<T> = match resp.json().await {
+                Ok(env) => env,
+                Err(e) => {
+                    last_err = Some(Error::Http(e));
+                    continue;
+                }
+            };
+            if env.retcode != 0 {
+                return Err(Error::Api {
+                    code: env.retcode,
+                    message: env.message,
+                });
+            }
+            let data = env.data.ok_or(Error::Empty)?;
+            return Ok((data, env.meta.unwrap_or_default()));
         }
-        let env: Envelope<T> = resp.json().await?;
-        if env.retcode != 0 {
-            return Err(Error::Api {
-                code: env.retcode,
-                message: env.message,
-            });
-        }
-        let data = env.data.ok_or(Error::Empty)?;
-        Ok((data, env.meta.unwrap_or_default()))
+        Err(last_err.unwrap_or(Error::Empty))
     }
 
     /// Most recently updated series, newest first (sorted by
@@ -129,12 +145,32 @@ impl ShinigamiClient {
 
     /// Downloads an asset (page image / cover) with the site referer.
     pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = self.http.get(url).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(Error::Status(status.as_u16()));
+        let mut last_err = None;
+        for attempt in 0..2 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            let resp = match self.http.get(url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = Some(Error::Http(e));
+                    continue;
+                }
+            };
+            let status = resp.status();
+            if !status.is_success() {
+                last_err = Some(Error::Status(status.as_u16()));
+                continue;
+            }
+            match resp.bytes().await {
+                Ok(b) => return Ok(b.to_vec()),
+                Err(e) => {
+                    last_err = Some(Error::Http(e));
+                    continue;
+                }
+            }
         }
-        Ok(resp.bytes().await?.to_vec())
+        Err(last_err.unwrap_or(Error::Empty))
     }
 }
 

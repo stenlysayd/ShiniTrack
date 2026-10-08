@@ -26,7 +26,7 @@ export async function renderSettings() {
   if (!viewEl) return;
   viewEl.innerHTML = '';
 
-  let appVersion = 'v0.2.3';
+  let appVersion = 'v1.0.1';
   try {
     const appInfo = await api.get_app_info();
     if (appInfo && appInfo.version) {

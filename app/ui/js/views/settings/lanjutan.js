@@ -131,7 +131,7 @@ export const lanjutanSchema = [
     onClick: async () => {
       try {
         const info = await api.get_app_info();
-        const debugText = `ShiniTrack ${info.version || 'v0.2.3'} (build ${info.build_code || 1}) | Platform: ${info.platform || 'unknown'} | Schema: v2`;
+        const debugText = `ShiniTrack ${info.version || 'v1.0.1'} (build ${info.build_code || 1}) | Platform: ${info.platform || 'unknown'} | Schema: v2`;
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(debugText);
         }
@@ -144,7 +144,7 @@ export const lanjutanSchema = [
   },
   {
     type: 'info',
-    text: 'Info debug: ShiniTrack v0.2.3 • Rust backend (rusqlite v2) • Vanilla UI'
+    text: 'Info debug: ShiniTrack v1.0.1 • Rust backend (rusqlite v2) • Vanilla UI'
   }
 ];
 

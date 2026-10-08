@@ -3313,7 +3313,7 @@ body:not(.reader-active) .reader-page-overlay {
 
 /* ========================================================= STATISTIK VIEW */
 .stats-container {
-  padding: 12px 14px 80px 14px;
+  padding: 0 0 80px 0;
   max-width: 600px;
   margin: 0 auto;
   display: flex;
@@ -3329,7 +3329,7 @@ body:not(.reader-active) .reader-page-overlay {
   color: var(--text-faint);
   margin-top: 10px;
   margin-bottom: 2px;
-  padding-left: 2px;
+  padding-left: 0;
 }
 
 .stats-hero-card {
@@ -3413,6 +3413,7 @@ body:not(.reader-active) .reader-page-overlay {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
@@ -3459,6 +3460,7 @@ body:not(.reader-active) .reader-page-overlay {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  flex: 1;
 }
 
 .stats-card-val {
@@ -3473,7 +3475,26 @@ body:not(.reader-active) .reader-page-overlay {
   font-size: 11.5px;
   color: var(--text-muted);
   margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+/* Incognito Badge in Topbar */
+.incognito-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #ff6b6b;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.incognito-pill svg {
+  display: block;
 }

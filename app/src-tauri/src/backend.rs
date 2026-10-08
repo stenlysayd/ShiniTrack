@@ -279,6 +279,46 @@ pub async fn background_check(dir: &Path) -> anyhow::Result<Vec<Notice>> {
     };
     let api = ShinigamiClient::new()?;
     notices.extend(direct_check(&store, &api).await?);
+
+    // Check if automatic backup is scheduled and due
+    let auto_freq = store
+        .kv_get("pref.storage.auto_backup_freq")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "off".into());
+    if auto_freq != "off" {
+        let last_backup_str = store.kv_get("pref.storage.last_backup").ok().flatten();
+        let should_backup = match last_backup_str {
+            None => true,
+            Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+                Err(_) => true,
+                Ok(last_dt) => {
+                    let now = chrono::Utc::now();
+                    let elapsed = now.signed_duration_since(last_dt);
+                    match auto_freq.as_str() {
+                        "6h" => elapsed.num_hours() >= 6,
+                        "12h" => elapsed.num_hours() >= 12,
+                        "24h" => elapsed.num_hours() >= 24,
+                        "weekly" => elapsed.num_days() >= 7,
+                        _ => false,
+                    }
+                }
+            },
+        };
+        if should_backup {
+            let include_token = store
+                .kv_get("pref.storage.backup_include_token")
+                .ok()
+                .flatten()
+                .map(|v| v == "1");
+            if let Err(e) = crate::commands::create_backup_internal(dir, &store, include_token) {
+                log::warn!("automatic backup failed: {e:#}");
+            } else {
+                log::info!("automatic backup completed successfully");
+            }
+        }
+    }
+
     Ok(notices)
 }
 

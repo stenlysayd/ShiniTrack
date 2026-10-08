@@ -79,6 +79,19 @@ function setupPressEffects() {
   document.addEventListener('pointercancel', handlePointerRelease);
 }
 
+export function updateIncognitoUI() {
+  const incognitoBadge = document.getElementById('incognito-badge');
+  if (incognitoBadge) {
+    const isIncognito = getPref('privacy.incognito', '0') === '1';
+    if (isIncognito) {
+      incognitoBadge.classList.remove('hidden');
+    } else {
+      incognitoBadge.classList.add('hidden');
+    }
+  }
+}
+window.updateIncognitoUI = updateIncognitoUI;
+
 window.addEventListener('DOMContentLoaded', async () => {
   if (typeof setupGlobalEvents === 'function') setupGlobalEvents();
   setupUpdateModal();
@@ -87,6 +100,11 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   await initPrefs();
   applyThemeSettings();
+  updateIncognitoUI();
+
+  if (getPref('storage.clear_cache_on_open', '0') === '1') {
+    api.clear_cache({ target: 'chapters' }).catch(e => console.warn('Clear cache on open error:', e));
+  }
 
   if (!window.location.hash) {
     navigate('#/favorites');
@@ -214,7 +232,10 @@ function setupUpdateModal() {
         cancelBtn.disabled = false;
       } else if (res.success) {
         showToast(res.message, 5000);
-        modal.classList.add('hidden');
+        dlText.textContent = 'Penginstal paket Android telah dibuka.';
+        installBtn.disabled = false;
+        installBtn.textContent = 'Pasang Ulang';
+        cancelBtn.disabled = false;
       } else {
         showToast(res.message, 5000);
         installBtn.disabled = false;

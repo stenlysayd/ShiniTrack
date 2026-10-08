@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::{ChapterEvent, ChapterItem, LastSeen, Manga};
 
 const SCHEMA: &str = r#"
@@ -879,6 +879,20 @@ impl Store {
     }
 
     pub fn create_category(&self, name: &str) -> Result<Category> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama kategori tidak boleh kosong".into(),
+            });
+        }
+        let lower = trimmed.to_lowercase();
+        if lower == "semua" || lower == "bawaan" {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama 'Semua' dan 'Bawaan' adalah kategori sistem dan tidak dapat digunakan".into(),
+            });
+        }
         let next_order: i64 = self
             .conn
             .query_row(
@@ -888,21 +902,35 @@ impl Store {
             )?;
         self.conn.execute(
             "INSERT INTO category (name, sort_order) VALUES (?1, ?2)",
-            params![name, next_order],
+            params![trimmed, next_order],
         )?;
         let id = self.conn.last_insert_rowid();
         Ok(Category {
             id,
-            name: name.to_string(),
+            name: trimmed.to_string(),
             sort_order: next_order,
             flags: 0,
         })
     }
 
     pub fn rename_category(&self, id: i64, new_name: &str) -> Result<()> {
+        let trimmed = new_name.trim();
+        if trimmed.is_empty() {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama kategori tidak boleh kosong".into(),
+            });
+        }
+        let lower = trimmed.to_lowercase();
+        if lower == "semua" || lower == "bawaan" {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama 'Semua' dan 'Bawaan' adalah kategori sistem dan tidak dapat digunakan".into(),
+            });
+        }
         self.conn.execute(
             "UPDATE category SET name = ?2 WHERE id = ?1",
-            params![id, new_name],
+            params![id, trimmed],
         )?;
         Ok(())
     }
@@ -948,6 +976,11 @@ impl Store {
     pub fn clear_reading_history(&self) -> Result<()> {
         self.conn.execute("DELETE FROM reading_progress", [])?;
         Ok(())
+    }
+
+    pub fn clear_chapter_cache(&self) -> Result<usize> {
+        let count = self.conn.execute("DELETE FROM chapter", [])?;
+        Ok(count)
     }
 
     pub fn reset_prefs(&self) -> Result<()> {
@@ -1989,5 +2022,40 @@ mod tests {
         assert_eq!(stats.total_read_chapters, 2);
         assert_eq!(stats.total_downloads, 1);
     }
+
+    #[test]
+    fn test_category_system_names_and_clear_cache() {
+        let s = Store::open_in_memory().unwrap();
+
+        // 1. System names "Semua" and "Bawaan" must be rejected
+        assert!(s.create_category("Semua").is_err());
+        assert!(s.create_category("semua").is_err());
+        assert!(s.create_category("  Bawaan  ").is_err());
+        assert!(s.create_category("").is_err());
+
+        let cat = s.create_category("Action").unwrap();
+        assert!(s.rename_category(cat.id, "Semua").is_err());
+        assert!(s.rename_category(cat.id, "Bawaan").is_err());
+        assert!(s.rename_category(cat.id, "Action Shonen").is_ok());
+
+        // 2. Clear chapter cache
+        let chapters = vec![
+            ChapterItem {
+                chapter_id: "ch-1".into(),
+                manga_id: "m-1".into(),
+                chapter_number: 1.0,
+                chapter_title: Some("Chapter 1".into()),
+                thumbnail_image_url: None,
+                view_count: None,
+                release_date: None,
+            },
+        ];
+        s.save_chapters(&chapters).unwrap();
+        let cleared = s.clear_chapter_cache().unwrap();
+        assert_eq!(cleared, 1);
+        let cleared_again = s.clear_chapter_cache().unwrap();
+        assert_eq!(cleared_again, 0);
+    }
 }
+
 

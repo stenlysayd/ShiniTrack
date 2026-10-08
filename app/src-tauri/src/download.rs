@@ -25,6 +25,22 @@ struct Progress<'a> {
     failed: u32,
 }
 
+fn sanitize_folder_name(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            other => other,
+        })
+        .collect();
+    let trimmed = clean.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        "Manga".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) -> anyhow::Result<Download> {
     let ctx = app.state::<AppCtx>();
     let detail = ctx
@@ -33,11 +49,24 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
         .await
         .context("fetch chapter detail")?;
     let low = ctx.settings().map(|s| s.low_quality).unwrap_or(false);
+
+    let manga_title = ctx
+        .store
+        .lock()
+        .unwrap()
+        .get_favorite(&detail.manga_id)
+        .ok()
+        .flatten()
+        .map(|f| f.title)
+        .unwrap_or_else(|| detail.manga_id.clone());
+
+    let clean_title = sanitize_folder_name(&manga_title);
+    let ch_folder = format!("Chapter {}", detail.chapter_number);
     let dir: PathBuf = ctx
         .dir
         .join("downloads")
-        .join(&detail.manga_id)
-        .join(&detail.chapter_id);
+        .join(&clean_title)
+        .join(&ch_folder);
     tokio::fs::create_dir_all(&dir).await?;
 
     let urls = detail.image_urls(low);
