@@ -44,3 +44,22 @@ TBD
 
 Perintah build Android (Kotlin):
 TBD
+
+## T1: Buang data dummy dari build produksi
+Status: DONE
+File yang diubah: app/src-tauri/src/commands.rs, app/src-tauri/src/updater.rs
+
+Hasil grep sebelum perubahan:
+- `app/src-tauri/src/commands.rs:607`: `manga_id: "solo-leveling-ragnarok".into(),` (DUMMY)
+- `app/src-tauri/src/commands.rs:609`: `text: "Chapter 35 telah rilis! Ketuk untuk membaca langsung.".into(),` (DUMMY)
+- `app/src-tauri/src/commands.rs:610`: `cover: Some("https://shinigami.asia/media/covers/solo-leveling-ragnarok.jpg".into()),` (DUMMY)
+- `app/src-tauri/src/updater.rs:160`: `release_name: "ShiniTrack v0.2.3 - Mihon UX Edition".to_string(),` (DUMMY)
+- `app/src-tauri/src/updater.rs:161`: `release_notes: "### Pembaruan v0.2.3\n- Perbaikan installer APK..."` (DUMMY)
+- `app/src-tauri/src/updater.rs:164`: `"https://github.com/stenlysayd/ShiniTrack/releases/download/v0.2.3/ShiniTrack-v0.2.3.apk"` (DUMMY)
+
+Nama file `debug-shinitrack.db` tidak ditemukan di codebase.
+
+Perintah verifikasi: `cargo check --workspace --all-targets`
+Output nyata:
+    Checking shinitrack-app v1.0.1 (C:\Users\MSI15\Pictures\New folder (2)\shinitrack\app\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.91s

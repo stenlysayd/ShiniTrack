@@ -153,20 +153,38 @@ pub async fn check_github_release(
 }
 
 pub fn mock_update_info(current_version: &str) -> UpdateInfo {
-    UpdateInfo {
-        current_version: current_version.to_string(),
-        latest_version: "v0.2.3".to_string(),
-        update_available: true,
-        release_name: "ShiniTrack v0.2.3 - Mihon UX Edition".to_string(),
-        release_notes: "### Pembaruan v0.2.3\n- Perbaikan installer APK & izin install unknown sources otomatis\n- Notifikasi rich ala Mihon dengan cover art dan tombol aksi\n- Sinkronisasi URL target repository GitHub yang tepat".to_string(),
-        published_at: chrono::Utc::now().to_rfc3339(),
-        download_url: Some(
-            "https://github.com/stenlysayd/ShiniTrack/releases/download/v0.2.3/ShiniTrack-v0.2.3.apk"
-                .to_string(),
-        ),
-        apk_name: Some("ShiniTrack-v0.2.3.apk".to_string()),
-        apk_size: Some(15980958),
-        html_url: "https://github.com/stenlysayd/ShiniTrack/releases".to_string(),
+    #[cfg(debug_assertions)]
+    {
+        UpdateInfo {
+            current_version: current_version.to_string(),
+            latest_version: "v0.2.3".to_string(),
+            update_available: true,
+            release_name: "ShiniTrack v0.2.3 - Mihon UX Edition".to_string(),
+            release_notes: "### Pembaruan v0.2.3\n- Perbaikan installer APK & izin install unknown sources otomatis\n- Notifikasi rich ala Mihon dengan cover art dan tombol aksi\n- Sinkronisasi URL target repository GitHub yang tepat".to_string(),
+            published_at: chrono::Utc::now().to_rfc3339(),
+            download_url: Some(
+                "https://github.com/stenlysayd/ShiniTrack/releases/download/v0.2.3/ShiniTrack-v0.2.3.apk"
+                    .to_string(),
+            ),
+            apk_name: Some("ShiniTrack-v0.2.3.apk".to_string()),
+            apk_size: Some(15980958),
+            html_url: "https://github.com/stenlysayd/ShiniTrack/releases".to_string(),
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        UpdateInfo {
+            current_version: current_version.to_string(),
+            latest_version: current_version.to_string(),
+            update_available: false,
+            release_name: String::new(),
+            release_notes: String::new(),
+            published_at: String::new(),
+            download_url: None,
+            apk_name: None,
+            apk_size: None,
+            html_url: String::new(),
+        }
     }
 }
 

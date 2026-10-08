@@ -600,16 +600,19 @@ pub async fn set_secure_screen(ctx: State<'_, AppCtx>, secure: bool) -> CmdResul
 
 #[tauri::command]
 pub async fn test_notification<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
-    show_notices(
-        &app,
-        &[Notice {
-            id: 9999,
-            manga_id: "solo-leveling-ragnarok".into(),
-            title: "Solo Leveling: Ragnarok".into(),
-            text: "Chapter 35 telah rilis! Ketuk untuk membaca langsung.".into(),
-            cover: Some("https://shinigami.asia/media/covers/solo-leveling-ragnarok.jpg".into()),
-        }],
-    );
+    #[cfg(debug_assertions)]
+    {
+        show_notices(
+            &app,
+            &[Notice {
+                id: 9999,
+                manga_id: "solo-leveling-ragnarok".into(),
+                title: "Solo Leveling: Ragnarok".into(),
+                text: "Chapter 35 telah rilis! Ketuk untuk membaca langsung.".into(),
+                cover: Some("https://shinigami.asia/media/covers/solo-leveling-ragnarok.jpg".into()),
+            }],
+        );
+    }
     Ok(())
 }
 
