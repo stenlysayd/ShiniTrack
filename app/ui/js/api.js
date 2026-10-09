@@ -82,6 +82,11 @@ export async function backup_create(args) {
   return invoke('backup_create', { includeToken });
 }
 export async function backup_restore(args) { return invoke('backup_restore', args); }
+export async function saf_open_tree(args) { return invoke('saf_open_tree', args); }
+export async function saf_create_document(args) { return invoke('saf_create_document', args); }
+export async function saf_share_document(args) { return invoke('saf_share_document', args); }
+export async function saf_export_downloads() { return invoke('saf_export_downloads'); }
+export async function saf_state() { return invoke('saf_state'); }
 export async function generate_crash_log() { return invoke('generate_crash_log'); }
 export async function clear_reading_history() { return invoke('clear_reading_history'); }
 export async function reset_settings() { return invoke('reset_settings'); }

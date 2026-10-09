@@ -29,7 +29,7 @@ class BackupWorker(
             }
         }
 
-        fun schedule(context: Context, intervalHours: Long = 24) {
+        fun schedule(context: Context, intervalHours: Long = 6) {
             val constraints = Constraints.Builder()
                 .setRequiresBatteryNotLow(true)
                 .build()
@@ -40,7 +40,7 @@ class BackupWorker(
 
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 workRequest
             )
             Log.i(TAG, "WorkManager periodic backup scheduled ($intervalHours hours)")
@@ -60,6 +60,7 @@ class BackupWorker(
             val dir = context.filesDir.absolutePath
             val success = triggerBackup(dir)
             if (success) {
+                ShiniBridge.syncBackupsToTree(context)
                 Log.i(TAG, "Background auto-backup completed successfully")
                 Result.success()
             } else {

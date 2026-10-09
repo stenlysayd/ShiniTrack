@@ -1613,6 +1613,69 @@ pub async fn backup_restore(
 }
 
 #[tauri::command]
+pub async fn saf_open_tree(kind: String) -> CmdResult<bool> {
+    #[cfg(target_os = "android")]
+    {
+        crate::jni_bridge::saf_open_tree(&kind).map_err(err)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = kind;
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn saf_create_document(source_path: String, default_name: String) -> CmdResult<bool> {
+    #[cfg(target_os = "android")]
+    {
+        crate::jni_bridge::saf_create_document(&source_path, &default_name).map_err(err)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (source_path, default_name);
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn saf_share_document(source_path: String) -> CmdResult<bool> {
+    #[cfg(target_os = "android")]
+    {
+        crate::jni_bridge::saf_share_document(&source_path).map_err(err)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = source_path;
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn saf_export_downloads() -> CmdResult<bool> {
+    #[cfg(target_os = "android")]
+    {
+        crate::jni_bridge::saf_export_downloads().map_err(err)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn saf_state() -> CmdResult<String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::jni_bridge::saf_state().map_err(err)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok("{}".into())
+    }
+}
+
+#[tauri::command]
 pub async fn generate_crash_log(ctx: State<'_, AppCtx>) -> CmdResult<String> {
     let now = Utc::now().to_rfc3339();
     let db_path = crate::backend::db_path(&ctx.dir);

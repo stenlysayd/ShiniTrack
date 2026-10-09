@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 
@@ -20,6 +21,22 @@ class MainActivity : TauriActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         Log.i(TAG, "POST_NOTIFICATIONS granted: $isGranted")
+    }
+
+    private val safActivityResult = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result: ActivityResult ->
+        ShiniBridge.handleSafActivityResult(this, result.resultCode, result.data)
+    }
+
+    fun launchSafIntent(intent: Intent): Boolean {
+        return try {
+            safActivityResult.launch(intent)
+            true
+        } catch (e: Throwable) {
+            Log.e(TAG, "SAF launch failed", e)
+            false
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

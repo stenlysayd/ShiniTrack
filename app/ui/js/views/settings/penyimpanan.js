@@ -2,14 +2,116 @@ import { renderSettings } from './render.js';
 import * as api from '../../api.js';
 import * as utils from '../../utils.js';
 import { getPref } from '../../state.js';
+import { createBottomSheet } from '../../components/bottom-sheet.js';
 
 let activeContainer = null;
+let focusListenerAttached = false;
 
 function formatBytes(bytes) {
   if (!bytes || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function fileNameFromPath(filePath) {
+  const clean = String(filePath || '').replace(/\\/g, '/');
+  return clean.split('/').filter(Boolean).pop() || 'shinitrack_backup.json';
+}
+
+function updateButtonSubtitle(title, subtitle) {
+  if (!activeContainer) return;
+  activeContainer.querySelectorAll('.settings-button-row').forEach(btn => {
+    const titleEl = btn.querySelector('.t');
+    const subEl = btn.querySelector('.s');
+    if (titleEl && subEl && titleEl.textContent === title) {
+      subEl.textContent = subtitle;
+    }
+  });
+}
+
+async function refreshSafState() {
+  if (!activeContainer) return;
+  try {
+    const raw = await api.saf_state();
+    const state = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+    updateButtonSubtitle(
+      'Folder cadangan otomatis',
+      state.backup_tree
+        ? `Folder: ${state.backup_tree}`
+        : 'Belum dipilih; cadangan otomatis tetap tersimpan di aplikasi'
+    );
+    updateButtonSubtitle(
+      'Folder ekspor unduhan',
+      state.export_tree
+        ? `Folder: ${state.export_tree}`
+        : 'Belum dipilih'
+    );
+  } catch (err) {
+    console.warn('Failed to refresh SAF state:', err);
+  }
+}
+
+function showBackupActions(result) {
+  const content = document.createElement('div');
+  content.style.display = 'flex';
+  content.style.flexDirection = 'column';
+  content.style.gap = '10px';
+
+  const title = document.createElement('div');
+  title.className = 't';
+  title.textContent = 'Cadangan dibuat';
+  content.appendChild(title);
+
+  const subtitle = document.createElement('div');
+  subtitle.className = 's';
+  subtitle.textContent = `${result.favorites_count} komik, ${result.categories_count} kategori`;
+  content.appendChild(subtitle);
+
+  let closeSheet = () => {};
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn primary';
+  saveBtn.type = 'button';
+  saveBtn.textContent = 'Simpan ke…';
+  saveBtn.addEventListener('click', async () => {
+    try {
+      const ok = await api.saf_create_document({
+        sourcePath: result.file_path,
+        defaultName: fileNameFromPath(result.file_path)
+      });
+      if (!ok) utils.showToast('Simpan ke berkas tersedia di Android.');
+      closeSheet();
+    } catch (err) {
+      utils.showToast(`Gagal menyimpan: ${err}`);
+    }
+  });
+  content.appendChild(saveBtn);
+
+  const shareBtn = document.createElement('button');
+  shareBtn.className = 'btn';
+  shareBtn.type = 'button';
+  shareBtn.textContent = 'Bagikan';
+  shareBtn.addEventListener('click', async () => {
+    try {
+      const ok = await api.saf_share_document({ sourcePath: result.file_path });
+      if (!ok) utils.showToast('Bagikan berkas tersedia di Android.');
+      closeSheet();
+    } catch (err) {
+      utils.showToast(`Gagal membagikan: ${err}`);
+    }
+  });
+  content.appendChild(shareBtn);
+
+  closeSheet = createBottomSheet({ content });
 }
 
 async function refreshStorageInfo() {
@@ -21,7 +123,9 @@ async function refreshStorageInfo() {
     // Update location text
     const infoEls = activeContainer.querySelectorAll('.settings-info-text');
     if (infoEls[0]) {
-      infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${info.data_dir}<br/><span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">&bull; Folder Unduhan: downloads/&lt;Judul Komik&gt;/Chapter &lt;X&gt;<br/>&bull; Folder Cadangan: backups/ &amp; Unduhan Perangkat</span>`;
+      const sep = String(info.data_dir || '').endsWith('/') ? '' : '/';
+      const downloadsPath = `${info.data_dir || ''}${sep}downloads`;
+      infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${escapeHtml(info.data_dir)}<br/><b>Unduhan internal:</b> ${escapeHtml(downloadsPath)} (${formatBytes(info.downloads_bytes)})<br/><span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">Unduhan disimpan di dalam aplikasi; gunakan 'Salin unduhan ke folder ini' untuk mengambil berkasnya.<br/>&bull; Folder Cadangan: backups/</span>`;
     }
 
     // Update last backup text
@@ -51,6 +155,7 @@ async function refreshStorageInfo() {
   } catch (err) {
     console.warn('Failed to refresh storage info:', err);
   }
+  refreshSafState();
 }
 
 export const penyimpananSchema = [
@@ -83,19 +188,8 @@ export const penyimpananSchema = [
       try {
         const includeToken = getPref('storage.backup_include_token', '0') === '1';
         const res = await api.backup_create({ includeToken });
-        if (res.json) {
-          const blob = new Blob([res.json], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-          a.href = url;
-          a.download = `shinitrack_backup_${dateStr}.json`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
-        utils.showToast(`Cadangan dibuat & diunduh (${res.favorites_count} komik, ${res.categories_count} kategori)`);
+        utils.showToast(`Cadangan dibuat (${res.favorites_count} komik, ${res.categories_count} kategori)`);
+        showBackupActions(res);
         refreshStorageInfo();
       } catch (err) {
         utils.showToast(`Gagal membuat cadangan: ${err}`);
@@ -147,6 +241,48 @@ export const penyimpananSchema = [
       { value: 'weekly', label: 'Mingguan' }
     ],
     default: 'off'
+  },
+  {
+    type: 'button',
+    title: 'Folder cadangan otomatis',
+    subtitle: 'Belum dipilih; cadangan otomatis tetap tersimpan di aplikasi',
+    icon: window.Icons && window.Icons.folder ? window.Icons.folder() : '',
+    onClick: async () => {
+      try {
+        const ok = await api.saf_open_tree({ kind: 'backup' });
+        if (!ok) utils.showToast('Pemilih folder tersedia di Android.');
+      } catch (err) {
+        utils.showToast(`Gagal memilih folder: ${err}`);
+      }
+    }
+  },
+  {
+    type: 'button',
+    title: 'Folder ekspor unduhan',
+    subtitle: 'Belum dipilih',
+    icon: window.Icons && window.Icons.folder ? window.Icons.folder() : '',
+    onClick: async () => {
+      try {
+        const ok = await api.saf_open_tree({ kind: 'export' });
+        if (!ok) utils.showToast('Pemilih folder tersedia di Android.');
+      } catch (err) {
+        utils.showToast(`Gagal memilih folder: ${err}`);
+      }
+    }
+  },
+  {
+    type: 'button',
+    title: 'Salin unduhan ke folder ini',
+    subtitle: 'Salin isi downloads/<Judul>/Chapter N ke folder ekspor unduhan',
+    icon: window.Icons && window.Icons.download ? window.Icons.download() : '',
+    onClick: async () => {
+      try {
+        const ok = await api.saf_export_downloads();
+        if (!ok) utils.showToast('Pilih folder ekspor unduhan di Android.');
+      } catch (err) {
+        utils.showToast(`Gagal menyalin unduhan: ${err}`);
+      }
+    }
   },
   {
     type: 'info',
@@ -299,6 +435,13 @@ export function renderPenyimpanan() {
   });
 
   viewEl.appendChild(container);
+
+  if (!focusListenerAttached) {
+    window.addEventListener('focus', () => {
+      refreshStorageInfo();
+    });
+    focusListenerAttached = true;
+  }
 
   refreshStorageInfo();
 }

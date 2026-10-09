@@ -151,6 +151,84 @@ pub fn request_install_permission() -> anyhow::Result<bool> {
     val.z().map_err(|e| e.into())
 }
 
+pub fn saf_open_tree(kind: &str) -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let j_kind_res = env.new_string(kind);
+    let j_kind = java_call(&mut env, j_kind_res, "create SAF kind string")?;
+    let val_res = env.call_static_method(
+        &class,
+        "openDocumentTree",
+        "(Ljava/lang/String;)Z",
+        &[(&j_kind).into()],
+    );
+    let val = java_call(&mut env, val_res, "call openDocumentTree")?;
+    val.z().map_err(|e| e.into())
+}
+
+pub fn saf_create_document(source_path: &str, default_name: &str) -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let j_source_res = env.new_string(source_path);
+    let j_source = java_call(&mut env, j_source_res, "create SAF source string")?;
+    let j_name_res = env.new_string(default_name);
+    let j_name = java_call(&mut env, j_name_res, "create SAF filename string")?;
+    let val_res = env.call_static_method(
+        &class,
+        "createSafDocument",
+        "(Ljava/lang/String;Ljava/lang/String;)Z",
+        &[(&j_source).into(), (&j_name).into()],
+    );
+    let val = java_call(&mut env, val_res, "call createSafDocument")?;
+    val.z().map_err(|e| e.into())
+}
+
+pub fn saf_share_document(source_path: &str) -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let j_source_res = env.new_string(source_path);
+    let j_source = java_call(&mut env, j_source_res, "create SAF source string")?;
+    let val_res = env.call_static_method(
+        &class,
+        "shareDocument",
+        "(Ljava/lang/String;)Z",
+        &[(&j_source).into()],
+    );
+    let val = java_call(&mut env, val_res, "call shareDocument")?;
+    val.z().map_err(|e| e.into())
+}
+
+pub fn saf_export_downloads() -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let val_res = env.call_static_method(&class, "copyDownloadsToTree", "()Z", &[]);
+    let val = java_call(&mut env, val_res, "call copyDownloadsToTree")?;
+    val.z().map_err(|e| e.into())
+}
+
+pub fn saf_state() -> anyhow::Result<String> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let val_res = env.call_static_method(&class, "getSafState", "()Ljava/lang/String;", &[]);
+    let val = java_call(&mut env, val_res, "call getSafState")?;
+    let j_obj = val.l().map_err(|e| anyhow::anyhow!("read getSafState result: {e}"))?;
+    if j_obj.is_null() {
+        return Ok("{}".into());
+    }
+    let j_str: JString = j_obj.into();
+    Ok(get_string(&mut env, &j_str).unwrap_or_else(|| "{}".into()))
+}
+
 pub fn is_wifi_connected() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
@@ -344,7 +422,24 @@ pub extern "system" fn Java_id_shinitrack_app_BackupWorker_triggerBackup(
     let Some(dir) = get_string(&mut env, &data_dir) else {
         return JNI_FALSE;
     };
-    match crate::commands::backup_create_headless(&PathBuf::from(dir)) {
+    let dir = PathBuf::from(dir);
+    let store = match shinitrack_core::store::Store::open(backend::db_path(&dir)) {
+        Ok(store) => store,
+        Err(e) => {
+            log::error!("BackupWorker store open failed: {e:#}");
+            return JNI_FALSE;
+        }
+    };
+    if !backend::auto_backup_due(&store) {
+        log::info!("BackupWorker skipped: automatic backup is not due");
+        return JNI_TRUE;
+    }
+    let include_token = store
+        .kv_get("pref.storage.backup_include_token")
+        .ok()
+        .flatten()
+        .map(|v| v == "1");
+    match crate::commands::create_backup_internal(&dir, &store, include_token) {
         Ok(res) => {
             log::info!(
                 "BackupWorker completed: {} (favs: {}, cats: {})",
