@@ -1129,6 +1129,8 @@ fn dir_size(path: &std::path::Path) -> u64 {
 pub struct StorageInfo {
     pub data_dir: String,
     pub cache_bytes: u64,
+    pub chapter_cache_bytes: u64,
+    pub cover_cache_bytes: u64,
     pub downloads_bytes: u64,
     pub database_bytes: u64,
     pub total_used_bytes: u64,
@@ -1138,6 +1140,8 @@ pub struct StorageInfo {
 #[tauri::command]
 pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
     let data_dir = ctx.dir.to_string_lossy().into_owned();
+    let chapter_cache_bytes = dir_size(&ctx.dir.join("cache").join("chapters"));
+    let cover_cache_bytes = dir_size(&ctx.dir.join("cache").join("img"));
     let cache_bytes = dir_size(&ctx.dir.join("cache"));
     let downloads_bytes = dir_size(&ctx.dir.join("downloads"));
 
@@ -1157,6 +1161,8 @@ pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
     Ok(StorageInfo {
         data_dir,
         cache_bytes,
+        chapter_cache_bytes,
+        cover_cache_bytes,
         downloads_bytes,
         database_bytes,
         total_used_bytes,
@@ -1171,20 +1177,11 @@ pub async fn clear_cache(ctx: State<'_, AppCtx>, target: Option<String>) -> CmdR
 
     if t == "all" || t == "chapters" || t == "chapter" {
         ctx.chapter_cache.lock().unwrap().clear();
-        let deleted_rows = ctx
-            .store
-            .lock()
-            .unwrap()
-            .clear_chapter_cache()
-            .unwrap_or(0);
         let p = ctx.dir.join("cache").join("chapters");
         if p.exists() {
             freed += dir_size(&p);
             let _ = std::fs::remove_dir_all(&p);
             let _ = std::fs::create_dir_all(&p);
-        }
-        if freed == 0 && deleted_rows > 0 {
-            freed += (deleted_rows as u64) * 512;
         }
     }
     if t == "all" || t == "covers" || t == "cover" || t == "img" {

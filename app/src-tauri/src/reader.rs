@@ -90,6 +90,89 @@ pub async fn handle<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Re
     }
 }
 
+pub fn fnv1a64(s: &str) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash = OFFSET_BASIS;
+    for byte in s.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
+pub const MAX_CACHE_BYTES: u64 = 200 * 1024 * 1024; // 200 MB
+pub const PRUNE_TARGET_BYTES: u64 = 180 * 1024 * 1024; // 90% = 180 MB
+static LAST_PRUNE_SECS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+pub fn prune_cache_dir(dir: &std::path::Path, max_bytes: u64, target_bytes: u64) -> std::io::Result<u64> {
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let mut entries = Vec::new();
+    let mut total_bytes = 0u64;
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Ok(meta) = entry.metadata() {
+                let size = meta.len();
+                let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                total_bytes += size;
+                entries.push((path, size, mtime));
+            }
+        }
+    }
+
+    if total_bytes <= max_bytes {
+        return Ok(0);
+    }
+
+    entries.sort_by_key(|(_, _, mtime)| *mtime);
+
+    let mut deleted_bytes = 0u64;
+    for (path, size, _) in entries {
+        if total_bytes <= target_bytes {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total_bytes = total_bytes.saturating_sub(size);
+            deleted_bytes += size;
+            if path.extension().map_or(false, |ext| ext == "bin") {
+                let companion = path.with_extension("ct");
+                if companion.exists() {
+                    if let Ok(cm) = std::fs::metadata(&companion) {
+                        let csize = cm.len();
+                        if std::fs::remove_file(&companion).is_ok() {
+                            total_bytes = total_bytes.saturating_sub(csize);
+                            deleted_bytes += csize;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(deleted_bytes)
+}
+
+fn prune_chapter_cache_rate_limited(dir: &std::path::Path) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let last = LAST_PRUNE_SECS.load(std::sync::atomic::Ordering::Relaxed);
+    if now - last < 30 {
+        return;
+    }
+    LAST_PRUNE_SECS.store(now, std::sync::atomic::Ordering::Relaxed);
+
+    let dir_clone = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let _ = prune_cache_dir(&dir_clone, MAX_CACHE_BYTES, PRUNE_TARGET_BYTES);
+    });
+}
+
 async fn page(ctx: &AppCtx, chapter_id: &str, file: &str) -> Response<Vec<u8>> {
     if file.contains("..") || file.contains('/') || file.contains('\\') {
         return not_found("bad file name");
@@ -122,8 +205,44 @@ async fn page(ctx: &AppCtx, chapter_id: &str, file: &str) -> Response<Vec<u8>> {
         return not_found("page not in chapter");
     };
     let url = detail.image_urls(low).swap_remove(idx);
+
+    let key = format!("{:016x}", fnv1a64(&url));
+    let cache_dir = ctx.dir.join("cache").join("chapters");
+    let bin_path = cache_dir.join(format!("{key}.bin"));
+    let ct_path = cache_dir.join(format!("{key}.ct"));
+
+    // Check disk cache
+    if bin_path.exists() {
+        if let Ok(bytes) = tokio::fs::read(&bin_path).await {
+            if !bytes.is_empty() {
+                let ctype = tokio::fs::read_to_string(&ct_path)
+                    .await
+                    .unwrap_or_else(|_| content_type(file).to_string());
+                return respond(StatusCode::OK, &ctype, bytes);
+            }
+        }
+    }
+
     match ctx.api.fetch_bytes(&url).await {
-        Ok(bytes) => respond(StatusCode::OK, content_type(file), bytes),
+        Ok(bytes) => {
+            let ctype = content_type(file);
+            if let Err(e) = tokio::fs::create_dir_all(&cache_dir).await {
+                eprintln!("reader cache create_dir_all failed: {e}");
+            } else {
+                let part_path = cache_dir.join(format!("{key}.bin.part"));
+                if let Err(e) = tokio::fs::write(&part_path, &bytes).await {
+                    eprintln!("reader cache write part failed: {e}");
+                } else if let Err(e) = tokio::fs::rename(&part_path, &bin_path).await {
+                    eprintln!("reader cache rename failed: {e}");
+                } else {
+                    if let Err(e) = tokio::fs::write(&ct_path, ctype.as_bytes()).await {
+                        eprintln!("reader cache write ct failed: {e}");
+                    }
+                    prune_chapter_cache_rate_limited(&cache_dir);
+                }
+            }
+            respond(StatusCode::OK, ctype, bytes)
+        }
         Err(e) => respond(StatusCode::BAD_GATEWAY, "text/plain", e.to_string().into_bytes()),
     }
 }
@@ -161,5 +280,37 @@ mod tests {
         assert!(host_allowed("https://assets.shngm.id/x.jpg"));
         assert!(!host_allowed("https://evil.com/assets.shngm.id"));
         assert!(!host_allowed("http://assets.shngm.id/x.jpg"));
+    }
+
+    #[test]
+    fn test_fnv1a64() {
+        assert_eq!(fnv1a64(""), 0xcbf29ce484222325);
+        assert_ne!(fnv1a64("test"), 0);
+    }
+
+    #[test]
+    fn test_prune_cache_dir() {
+        let tmp = std::env::temp_dir().join(format!("shinitrack_test_cache_{}", fnv1a64("test_prune")));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let f1 = tmp.join("file1.bin");
+        let f2 = tmp.join("file2.bin");
+        let f3 = tmp.join("file3.bin");
+
+        std::fs::write(&f1, vec![0u8; 600]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&f2, vec![0u8; 600]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&f3, vec![0u8; 600]).unwrap();
+
+        // Total is 1800 bytes. Max is 1000, target is 700.
+        let deleted = prune_cache_dir(&tmp, 1000, 700).unwrap();
+        assert_eq!(deleted, 1200);
+        let remaining = std::fs::read_dir(&tmp).unwrap().count();
+        assert_eq!(remaining, 1);
+        assert!(f3.exists(), "Newest file should remain");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

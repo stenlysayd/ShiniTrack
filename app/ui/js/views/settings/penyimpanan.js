@@ -43,9 +43,11 @@ async function refreshStorageInfo() {
       const subEl = btn.querySelector('.s');
       if (!titleEl || !subEl) return;
       if (titleEl.textContent === 'Hapus cache bab') {
-        subEl.textContent = `Kosongkan database bab & memori sementara (${formatBytes(info.cache_bytes)})`;
+        const sz = info.chapter_cache_bytes != null ? info.chapter_cache_bytes : info.cache_bytes;
+        subEl.textContent = `Kosongkan cache halaman bab di memori dan disk (${formatBytes(sz)})`;
       } else if (titleEl.textContent === 'Hapus cache sampul') {
-        subEl.textContent = `Kosongkan cache gambar sampul manga (Database: ${formatBytes(info.database_bytes)})`;
+        const sz = info.cover_cache_bytes != null ? info.cover_cache_bytes : 0;
+        subEl.textContent = `Kosongkan cache gambar sampul manga (${formatBytes(sz)})`;
       }
     });
   } catch (err) {
@@ -159,14 +161,13 @@ export const penyimpananSchema = [
   {
     type: 'button',
     title: 'Hapus cache bab',
-    subtitle: 'Kosongkan database bab & memori sementara',
+    subtitle: 'Kosongkan cache halaman bab di memori dan disk',
     icon: window.Icons && window.Icons.trash ? window.Icons.trash() : '',
     onClick: async () => {
       utils.showToast('Membersihkan cache bab...');
       try {
         const freed = await api.clear_cache({ target: 'chapters' });
-        const freedMsg = freed > 0 ? ` (${formatBytes(freed)})` : '';
-        utils.showToast(`Cache bab berhasil dibersihkan${freedMsg}`);
+        utils.showToast(`Cache bab dibersihkan (${formatBytes(freed)})`);
         refreshStorageInfo();
       } catch (err) {
         utils.showToast(`Gagal membersihkan cache: ${err}`);

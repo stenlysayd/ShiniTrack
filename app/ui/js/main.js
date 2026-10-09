@@ -110,7 +110,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   applyThemeSettings();
   updateIncognitoUI();
 
-  if (getPref('storage.clear_cache_on_open', '0') === '1') {
+  if (getPref('storage.clear_cache_on_open', '0') === '1' || getPref('storage.clear_cache_on_launch', '0') === '1') {
     api.clear_cache({ target: 'chapters' }).catch(e => console.warn('Clear cache on open error:', e));
   }
 
