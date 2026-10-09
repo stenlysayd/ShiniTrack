@@ -1293,7 +1293,8 @@ pub struct StorageInfo {
 #[tauri::command]
 pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
     let data_dir = ctx.dir.to_string_lossy().into_owned();
-    let cache_bytes = dir_size(&ctx.dir.join("cache"));
+    let cache_root_bytes = dir_size(&ctx.dir.join("cache"));
+    let cache_bytes = dir_size(&ctx.dir.join("cache").join("chapters"));
     let downloads_bytes = dir_size(&ctx.dir.join("downloads"));
 
     let db_path = backend::db_path(&ctx.dir);
@@ -1305,7 +1306,7 @@ pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
         database_bytes += m.len();
     }
 
-    let total_used_bytes = cache_bytes + downloads_bytes + database_bytes;
+    let total_used_bytes = cache_root_bytes + downloads_bytes + database_bytes;
     let store = ctx.store.lock().unwrap();
     let last_backup = store.kv_get("pref.storage.last_backup").ok().flatten();
 
@@ -1326,7 +1327,7 @@ pub async fn clear_cache(ctx: State<'_, AppCtx>, target: Option<String>) -> CmdR
 
     if t == "all" || t == "chapters" || t == "chapter" {
         ctx.chapter_cache.lock().unwrap().clear();
-        let deleted_rows = ctx
+        let _deleted_rows = ctx
             .store
             .lock()
             .unwrap()
@@ -1337,9 +1338,6 @@ pub async fn clear_cache(ctx: State<'_, AppCtx>, target: Option<String>) -> CmdR
             freed += dir_size(&p);
             let _ = std::fs::remove_dir_all(&p);
             let _ = std::fs::create_dir_all(&p);
-        }
-        if freed == 0 && deleted_rows > 0 {
-            freed += (deleted_rows as u64) * 512;
         }
     }
     if t == "all" || t == "covers" || t == "cover" || t == "img" {
