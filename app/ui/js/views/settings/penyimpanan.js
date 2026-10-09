@@ -41,8 +41,28 @@ function ensureSafListener() {
         utils.showToast(ok ? 'Cadangan berhasil disimpan' : `Batal/Gagal simpan: ${message}`);
       } else if (kind === 'share_backup') {
         if (!ok) utils.showToast(`Gagal membagikan: ${message}`);
+      } else if (kind === 'pick_export_tree') {
+        if (ok && uri) {
+          api.pref_set({ key: 'dl.export_tree_uri', value: uri }).then(() => {
+            utils.showToast(`Folder ekspor unduhan: ${message}`);
+            refreshStorageInfo();
+          });
+        } else {
+          utils.showToast(`Pilih folder: ${message}`);
+        }
+      } else if (kind === 'export_downloads') {
+        utils.showToast(message || (ok ? 'Unduhan berhasil disalin' : 'Gagal menyalin unduhan'));
+        refreshStorageInfo();
       }
     });
+
+    window.__TAURI__.event.listen('export-progress', (event) => {
+      const { done, total } = event.payload || {};
+      if (total > 0) {
+        utils.showToast(`Menyalin unduhan: ${done}/${total} berkas`);
+      }
+    });
+
     safListenerAttached = true;
   }
 }
@@ -108,7 +128,12 @@ async function refreshStorageInfo() {
     // Update location text
     const infoEls = activeContainer.querySelectorAll('.settings-info-text');
     if (infoEls[0]) {
-      infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${info.data_dir}<br/><span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">&bull; Folder Unduhan: downloads/&lt;Judul Komik&gt;/Chapter &lt;X&gt;<br/>&bull; Folder Cadangan: backups/ &amp; Unduhan Perangkat</span>`;
+      const dlBytesStr = formatBytes(info.downloads_bytes || 0);
+      infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${info.data_dir}<br/>` +
+        `<b>Jalur Unduhan Internal:</b> ${info.data_dir}/downloads (${dlBytesStr})<br/>` +
+        `<span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">` +
+        `Unduhan disimpan di dalam aplikasi agar cepat dibaca. Gunakan 'Salin unduhan ke folder ini' untuk mengambil berkasnya.` +
+        `</span>`;
     }
 
     // Auto backup warning text
@@ -145,6 +170,8 @@ async function refreshStorageInfo() {
         subEl.textContent = `Kosongkan cache gambar sampul manga (${formatBytes(sz)})`;
       } else if (titleEl.textContent === 'Folder cadangan otomatis') {
         subEl.textContent = info.backup_tree_folder || 'Belum dipilih';
+      } else if (titleEl.textContent === 'Folder ekspor unduhan') {
+        subEl.textContent = info.export_tree_folder || 'Belum dipilih';
       }
     });
   } catch (err) {
@@ -304,6 +331,38 @@ export const penyimpananSchema = [
   {
     type: 'header',
     title: 'Ekspor'
+  },
+  {
+    type: 'button',
+    title: 'Folder ekspor unduhan',
+    subtitle: 'Belum dipilih',
+    icon: window.Icons && window.Icons.folder ? window.Icons.folder() : '',
+    onClick: async () => {
+      try {
+        await invoke('backup_create', { action: 'pick_export_tree' });
+      } catch (e) {
+        utils.showToast(`Gagal memilih folder: ${e}`);
+      }
+    }
+  },
+  {
+    type: 'button',
+    title: 'Salin unduhan ke folder ini',
+    subtitle: 'Salin berkas komik yang sudah diunduh ke folder ekspor terpilih',
+    icon: window.Icons && window.Icons.download ? window.Icons.download() : '',
+    onClick: async () => {
+      try {
+        const info = await api.storage_info();
+        if (!info || !info.export_tree_uri) {
+          utils.showToast('Pilih folder ekspor unduhan terlebih dahulu');
+          return;
+        }
+        utils.showToast('Menyalin unduhan ke folder ekspor...');
+        await invoke('backup_create', { action: 'export_downloads' });
+      } catch (e) {
+        utils.showToast(`Gagal menyalin unduhan: ${e}`);
+      }
+    }
   },
   {
     type: 'button',

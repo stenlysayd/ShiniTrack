@@ -64,6 +64,7 @@ object ShiniBridge {
     external fun nativeHandlePush(dataDir: String, payload: ByteArray): String
     external fun nativeRegisterEndpoint(dataDir: String, endpoint: String): Boolean
     external fun nativeOnSafResult(kind: String, ok: Boolean, message: String, uri: String?)
+    external fun nativeOnExportProgress(done: Int, total: Int)
 
     fun init(context: Context) {
         appContext = context.applicationContext
@@ -370,6 +371,103 @@ object ShiniBridge {
             }
         } catch (t: Throwable) {
             Log.e(TAG, "nativeOnSafResult failed", t)
+        }
+    }
+
+    @JvmStatic
+    fun exportDownloadsToTree(treeUriStr: String): Boolean {
+        val ctx = appContext ?: currentActivity ?: return false
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val treeUri = Uri.parse(treeUriStr)
+                val destTree = DocumentFile.fromTreeUri(ctx, treeUri)
+                if (destTree == null || !destTree.canWrite()) {
+                    notifySafResult("export_downloads", false, "Folder tujuan tidak dapat ditulis", null)
+                    return@launch
+                }
+                val downloadsDir = File(ctx.filesDir, "downloads")
+                if (!downloadsDir.exists() || !downloadsDir.isDirectory) {
+                    notifySafResult("export_downloads", true, "Tidak ada unduhan untuk disalin", treeUriStr)
+                    return@launch
+                }
+
+                fun countFiles(dir: File): Int {
+                    var count = 0
+                    dir.listFiles()?.forEach { file ->
+                        if (file.isDirectory) {
+                            count += countFiles(file)
+                        } else if (!file.name.endsWith(".part")) {
+                            count += 1
+                        }
+                    }
+                    return count
+                }
+
+                val total = countFiles(downloadsDir)
+                if (total == 0) {
+                    notifySafResult("export_downloads", true, "Tidak ada berkas unduhan untuk disalin", treeUriStr)
+                    return@launch
+                }
+
+                var done = 0
+
+                fun copyRecursive(src: File, parentDoc: DocumentFile) {
+                    val files = src.listFiles() ?: return
+                    for (file in files) {
+                        if (file.isDirectory) {
+                            var subDoc = parentDoc.findFile(file.name)
+                            if (subDoc == null || !subDoc.isDirectory) {
+                                subDoc = parentDoc.createDirectory(file.name)
+                            }
+                            if (subDoc != null) {
+                                copyRecursive(file, subDoc)
+                            }
+                        } else {
+                            if (file.name.endsWith(".part")) continue
+                            val existing = parentDoc.findFile(file.name)
+                            if (existing != null && existing.isFile && existing.length() == file.length()) {
+                                done++
+                                notifyExportProgress(done, total)
+                                continue
+                            }
+                            val mime = when {
+                                file.name.endsWith(".jpg", true) || file.name.endsWith(".jpeg", true) -> "image/jpeg"
+                                file.name.endsWith(".png", true) -> "image/png"
+                                file.name.endsWith(".webp", true) -> "image/webp"
+                                else -> "application/octet-stream"
+                            }
+                            val destFile = existing ?: parentDoc.createFile(mime, file.name)
+                            if (destFile != null) {
+                                ctx.contentResolver.openOutputStream(destFile.uri)?.use { outStream ->
+                                    file.inputStream().use { inStream ->
+                                        inStream.copyTo(outStream)
+                                    }
+                                }
+                            }
+                            done++
+                            notifyExportProgress(done, total)
+                        }
+                    }
+                }
+
+                notifyExportProgress(0, total)
+                copyRecursive(downloadsDir, destTree)
+                notifySafResult("export_downloads", true, "Unduhan berhasil disalin ($done berkas)", treeUriStr)
+            } catch (t: Throwable) {
+                Log.e(TAG, "exportDownloadsToTree failed", t)
+                notifySafResult("export_downloads", false, t.message ?: "Gagal menyalin unduhan", null)
+            }
+        }
+        return true
+    }
+
+    fun notifyExportProgress(done: Int, total: Int) {
+        try {
+            if (isLoaded) {
+                nativeOnExportProgress(done, total)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "nativeOnExportProgress failed", t)
         }
     }
 

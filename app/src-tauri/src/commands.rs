@@ -667,11 +667,29 @@ pub async fn open_chapter(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResu
     } else {
         // Offline: list files from the download directory.
         let d = dl.expect("checked above");
-        let mut pages: Vec<String> = std::fs::read_dir(&d.dir)
+        let dir_path = {
+            let p = std::path::PathBuf::from(&d.dir);
+            if p.is_dir() {
+                p
+            } else {
+                let manga_title = ctx
+                    .store
+                    .lock()
+                    .unwrap()
+                    .get_favorite(&d.manga_id)
+                    .ok()
+                    .flatten()
+                    .map(|f| f.title)
+                    .unwrap_or_else(|| d.manga_id.clone());
+                let clean = crate::download::sanitize_folder_name(&manga_title);
+                crate::download::resolve_chapter_dir(&ctx.dir, &d.manga_id, &clean, &d.chapter_id, d.chapter_number)
+            }
+        };
+        let mut pages: Vec<String> = std::fs::read_dir(&dir_path)
             .map_err(err)?
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| !n.ends_with(".part"))
+            .filter(|n| !n.starts_with('.') && !n.ends_with(".part"))
             .collect();
         pages.sort();
         ReaderChapter {
@@ -734,7 +752,21 @@ pub async fn download_chapter<R: Runtime>(app: AppHandle<R>, chapter_id: String)
 pub async fn delete_download(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResult<()> {
     let store = ctx.store.lock().unwrap();
     if let Some(d) = store.get_download(&chapter_id).map_err(err)? {
-        let _ = std::fs::remove_dir_all(&d.dir);
+        let p = std::path::PathBuf::from(&d.dir);
+        if p.exists() {
+            let _ = std::fs::remove_dir_all(&p);
+        }
+        let manga_title = store
+            .get_favorite(&d.manga_id)
+            .ok()
+            .flatten()
+            .map(|f| f.title)
+            .unwrap_or_else(|| d.manga_id.clone());
+        let clean = crate::download::sanitize_folder_name(&manga_title);
+        let alt = crate::download::resolve_chapter_dir(&ctx.dir, &d.manga_id, &clean, &chapter_id, d.chapter_number);
+        if alt.exists() && alt != p {
+            let _ = std::fs::remove_dir_all(&alt);
+        }
         store.delete_download(&chapter_id).map_err(err)?;
     }
     Ok(())
@@ -1141,6 +1173,8 @@ pub struct StorageInfo {
     pub last_backup: Option<String>,
     pub backup_tree_uri: Option<String>,
     pub backup_tree_folder: Option<String>,
+    pub export_tree_uri: Option<String>,
+    pub export_tree_folder: Option<String>,
 }
 
 #[tauri::command]
@@ -1179,6 +1213,19 @@ pub async fn storage_info(_app: AppHandle, ctx: State<'_, AppCtx>) -> CmdResult<
         }
     });
 
+    let export_tree_uri = store.kv_get("pref.dl.export_tree_uri").ok().flatten();
+    let export_tree_folder = export_tree_uri.as_deref().and_then(|uri| {
+        #[cfg(target_os = "android")]
+        {
+            crate::jni_bridge::get_tree_folder_name(uri)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = uri;
+            Some("Folder Ekspor Terpilih".to_string())
+        }
+    });
+
     Ok(StorageInfo {
         data_dir,
         cache_bytes,
@@ -1190,6 +1237,8 @@ pub async fn storage_info(_app: AppHandle, ctx: State<'_, AppCtx>) -> CmdResult<
         last_backup,
         backup_tree_uri,
         backup_tree_folder,
+        export_tree_uri,
+        export_tree_folder,
     })
 }
 
@@ -1391,6 +1440,29 @@ pub async fn backup_create(
         #[cfg(target_os = "android")]
         {
             crate::jni_bridge::pick_saf_tree("pick_export_tree").map_err(err)?;
+            return Ok(BackupResult {
+                file_path: "".into(),
+                created_at: "".into(),
+                favorites_count: 0,
+                categories_count: 0,
+                json: "".into(),
+            });
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            return Err("SAF hanya didukung di Android".into());
+        }
+    }
+    if a == "export_downloads" {
+        #[cfg(target_os = "android")]
+        {
+            let store = ctx.store.lock().unwrap();
+            let uri = store
+                .kv_get("pref.dl.export_tree_uri")
+                .map_err(err)?
+                .flatten()
+                .ok_or_else(|| "Folder ekspor unduhan belum dipilih".to_string())?;
+            crate::jni_bridge::export_downloads_saf(&uri).map_err(err)?;
             return Ok(BackupResult {
                 file_path: "".into(),
                 created_at: "".into(),

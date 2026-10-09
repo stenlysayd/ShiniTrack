@@ -507,3 +507,39 @@ pub fn reschedule_backup_worker(freq: &str) {
     }
 }
 
+pub fn export_downloads_saf(tree_uri: &str) -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let j_uri = env.new_string(tree_uri)?;
+    let val = env.call_static_method(
+        class,
+        "exportDownloadsToTree",
+        "(Ljava/lang/String;)Z",
+        &[(&j_uri).into()],
+    )?;
+    Ok(val.z()?)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeOnExportProgress(
+    _env: JNIEnv,
+    _class: JClass,
+    done: jint,
+    total: jint,
+) {
+    #[derive(serde::Serialize, Clone)]
+    struct ExportProgressPayload {
+        done: i32,
+        total: i32,
+    }
+
+    emit_to_webview(
+        "export-progress",
+        ExportProgressPayload {
+            done: done as i32,
+            total: total as i32,
+        },
+    );
+}
+

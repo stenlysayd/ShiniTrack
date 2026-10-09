@@ -25,20 +25,71 @@ struct Progress<'a> {
     failed: u32,
 }
 
-fn sanitize_folder_name(name: &str) -> String {
+pub fn sanitize_folder_name(name: &str) -> String {
     let clean: String = name
         .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            other => other,
-        })
+        .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') && !c.is_control())
         .collect();
-    let trimmed = clean.trim().trim_matches('.');
-    if trimmed.is_empty() {
-        "Manga".to_string()
+    let trimmed = clean.trim().trim_matches('.').trim();
+    let limited: String = trimmed.chars().take(80).collect();
+    let final_trimmed = limited.trim().trim_matches('.').trim();
+    if final_trimmed.is_empty() {
+        "komik".to_string()
     } else {
-        trimmed.to_string()
+        final_trimmed.to_string()
     }
+}
+
+pub fn resolve_manga_folder(downloads_dir: &std::path::Path, clean_title: &str, manga_id: &str) -> PathBuf {
+    let base_folder = downloads_dir.join(clean_title);
+    let id_prefix = &manga_id[..manga_id.len().min(6)];
+    let suffixed_folder = downloads_dir.join(format!("{clean_title} [{id_prefix}]"));
+
+    if base_folder.exists() {
+        let id_file = base_folder.join(".manga_id");
+        if id_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&id_file) {
+                if content.trim() == manga_id {
+                    return base_folder;
+                } else {
+                    return suffixed_folder;
+                }
+            }
+        } else {
+            return base_folder;
+        }
+    }
+    base_folder
+}
+
+pub fn resolve_chapter_dir(
+    base_dir: &std::path::Path,
+    manga_id: &str,
+    clean_title: &str,
+    chapter_id: &str,
+    chapter_number: f64,
+) -> PathBuf {
+    let downloads = base_dir.join("downloads");
+    // 1. Try new layout
+    let new_path = downloads.join(clean_title).join(format!("Chapter {chapter_number}"));
+    if new_path.is_dir() {
+        return new_path;
+    }
+    // 2. Try suffixed layout
+    let id_prefix = &manga_id[..manga_id.len().min(6)];
+    let suffixed_path = downloads
+        .join(format!("{clean_title} [{id_prefix}]"))
+        .join(format!("Chapter {chapter_number}"));
+    if suffixed_path.is_dir() {
+        return suffixed_path;
+    }
+    // 3. Try legacy layout: downloads/<manga_id>/<chapter_id>
+    let legacy_path = downloads.join(manga_id).join(chapter_id);
+    if legacy_path.is_dir() {
+        return legacy_path;
+    }
+    // Default fallback to canonical new path
+    new_path
 }
 
 pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) -> anyhow::Result<Download> {
@@ -61,12 +112,16 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
         .unwrap_or_else(|| detail.manga_id.clone());
 
     let clean_title = sanitize_folder_name(&manga_title);
+    let downloads_dir = ctx.dir.join("downloads");
+    let manga_dir = resolve_manga_folder(&downloads_dir, &clean_title, &detail.manga_id);
+    tokio::fs::create_dir_all(&manga_dir).await?;
+    let id_file = manga_dir.join(".manga_id");
+    if !id_file.exists() {
+        let _ = tokio::fs::write(&id_file, detail.manga_id.as_bytes()).await;
+    }
+
     let ch_folder = format!("Chapter {}", detail.chapter_number);
-    let dir: PathBuf = ctx
-        .dir
-        .join("downloads")
-        .join(&clean_title)
-        .join(&ch_folder);
+    let dir: PathBuf = manga_dir.join(&ch_folder);
     tokio::fs::create_dir_all(&dir).await?;
 
     let urls = detail.image_urls(low);
@@ -86,8 +141,12 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
             let _permit = sem.acquire_owned().await.expect("semaphore");
             let target = dir.join(&file);
             let ok = if let Ok(meta) = tokio::fs::metadata(&target).await {
-                bytes.fetch_add(meta.len(), Ordering::Relaxed);
-                true // already downloaded (resume)
+                if meta.len() > 0 {
+                    bytes.fetch_add(meta.len(), Ordering::Relaxed);
+                    true // already downloaded (resume)
+                } else {
+                    false
+                }
             } else {
                 match api.fetch_bytes(&url).await {
                     Ok(b) => {
@@ -98,8 +157,13 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
                             tokio::fs::rename(&part, &target).await
                         }
                         .await;
-                        bytes.fetch_add(b.len() as u64, Ordering::Relaxed);
-                        res.is_ok()
+                        if res.is_ok() {
+                            bytes.fetch_add(b.len() as u64, Ordering::Relaxed);
+                            true
+                        } else {
+                            log::warn!("page {file} write/rename failed: {:?}", res.err());
+                            false
+                        }
                     }
                     Err(e) => {
                         log::warn!("page {file} failed: {e}");
@@ -310,5 +374,45 @@ mod tests {
     #[test]
     fn test_is_wifi_connected_desktop() {
         assert!(is_wifi_connected());
+    }
+
+    #[test]
+    fn test_sanitize_folder_name() {
+        assert_eq!(sanitize_folder_name("Normal Title"), "Normal Title");
+        assert_eq!(sanitize_folder_name("Title: With / Invalid * Chars?"), "Title With  Invalid  Chars");
+        assert_eq!(sanitize_folder_name("...Trimming Dots..."), "Trimming Dots");
+        assert_eq!(sanitize_folder_name("   "), "komik");
+        assert_eq!(sanitize_folder_name("///:::***???"), "komik");
+        assert_eq!(sanitize_folder_name("\x00\x07Hello\x1b"), "Hello");
+        let long_title = "a".repeat(100);
+        let sanitized = sanitize_folder_name(&long_title);
+        assert_eq!(sanitized.len(), 80);
+    }
+
+    #[test]
+    fn test_resolve_chapter_path_both_layouts() {
+        let temp_dir = std::env::temp_dir().join(format!("shinitrack_dl_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let manga_id = "abc123xyz";
+        let clean_title = "One Piece";
+        let chapter_id = "ch456";
+        let chapter_number = 1050.0;
+
+        // Legacy layout: downloads/<manga_id>/<chapter_id>
+        let legacy_dir = temp_dir.join("downloads").join(manga_id).join(chapter_id);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+
+        let resolved_legacy = resolve_chapter_dir(&temp_dir, manga_id, clean_title, chapter_id, chapter_number);
+        assert_eq!(resolved_legacy, legacy_dir);
+
+        // New layout: downloads/<clean_title>/Chapter <N>
+        let new_dir = temp_dir.join("downloads").join(clean_title).join(format!("Chapter {}", chapter_number));
+        std::fs::create_dir_all(&new_dir).unwrap();
+
+        let resolved_new = resolve_chapter_dir(&temp_dir, manga_id, clean_title, chapter_id, chapter_number);
+        assert_eq!(resolved_new, new_dir);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
