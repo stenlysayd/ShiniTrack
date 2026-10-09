@@ -80,13 +80,21 @@ function setupPressEffects() {
 }
 
 export function updateIncognitoUI() {
+  const isIncognito = getPref('privacy.incognito', '0') === '1';
   const incognitoBadge = document.getElementById('incognito-badge');
   if (incognitoBadge) {
-    const isIncognito = getPref('privacy.incognito', '0') === '1';
     if (isIncognito) {
       incognitoBadge.classList.remove('hidden');
     } else {
       incognitoBadge.classList.add('hidden');
+    }
+  }
+  const readerIncognitoBadge = document.getElementById('reader-incognito-badge');
+  if (readerIncognitoBadge) {
+    if (isIncognito) {
+      readerIncognitoBadge.classList.remove('hidden');
+    } else {
+      readerIncognitoBadge.classList.add('hidden');
     }
   }
 }

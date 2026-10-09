@@ -563,6 +563,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn is_incognito(&self) -> bool {
+        self.kv_get("pref.privacy.incognito")
+            .ok()
+            .flatten()
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    }
+
     pub fn save_reading_progress(
         &self,
         manga_id: &str,
@@ -571,6 +579,9 @@ impl Store {
         last_page: u32,
         read_duration: u64,
     ) -> Result<()> {
+        if self.is_incognito() {
+            return Ok(());
+        }
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             r#"INSERT INTO reading_progress (manga_id, chapter_id, chapter_number, last_page, read_duration, updated_at)
@@ -675,6 +686,9 @@ impl Store {
         chapter_number: f64,
         read: bool,
     ) -> Result<()> {
+        if read && self.is_incognito() {
+            return Ok(());
+        }
         let now = Utc::now().to_rfc3339();
         if read {
             self.conn.execute(
@@ -696,6 +710,9 @@ impl Store {
         chapters: &[(String, f64)],
         read: bool,
     ) -> Result<()> {
+        if read && self.is_incognito() {
+            return Ok(());
+        }
         let tx = self.conn.transaction()?;
         let now = Utc::now().to_rfc3339();
         if read {
@@ -2055,6 +2072,69 @@ mod tests {
         assert_eq!(cleared, 1);
         let cleared_again = s.clear_chapter_cache().unwrap();
         assert_eq!(cleared_again, 0);
+    }
+
+    #[test]
+    fn test_incognito() {
+        let mut s = Store::open_in_memory().unwrap();
+
+        // 1. Initially incognito is false
+        assert!(!s.is_incognito());
+
+        // 2. Enable incognito
+        s.kv_set("pref.privacy.incognito", "1").unwrap();
+        assert!(s.is_incognito());
+
+        // Add a favorite manga
+        s.upsert_favorite(&Favorite {
+            manga_id: "m-incog".into(),
+            title: "Incognito Manga".into(),
+            cover: None,
+            last_ch_id: None,
+            last_ch_num: None,
+            last_ch_time: None,
+            notify: true,
+            added_at: Utc::now(),
+        }).unwrap();
+
+        // Initial last_read_at in favorites is None
+        let favs = s.library_page(0, "recent", true, 0, 0, 0, 0, None, 10, 0).unwrap();
+        assert_eq!(favs.len(), 1);
+        assert_eq!(favs[0].last_read_at, None);
+
+        // When incognito=1: save_reading_progress does NOT insert row
+        s.save_reading_progress("m-incog", "ch-1", 1.0, 5, 60).unwrap();
+        assert_eq!(s.get_last_reading_progress("m-incog").unwrap(), None);
+        assert_eq!(s.list_history(10).unwrap().len(), 0);
+
+        // last_read_at in favorites must remain None
+        let favs_after = s.library_page(0, "recent", true, 0, 0, 0, 0, None, 10, 0).unwrap();
+        assert_eq!(favs_after[0].last_read_at, None);
+
+        // mark_chapter_read does NOT insert row
+        s.mark_chapter_read("m-incog", "ch-1", 1.0, true).unwrap();
+        assert!(!s.list_read_chapter_ids("m-incog").unwrap().contains("ch-1"));
+
+        // mark_chapters_read_batch does NOT insert row
+        s.mark_chapters_read_batch("m-incog", &[("ch-2".into(), 2.0)], true).unwrap();
+        assert!(!s.list_read_chapter_ids("m-incog").unwrap().contains("ch-2"));
+
+        // 3. Disable incognito
+        s.kv_set("pref.privacy.incognito", "0").unwrap();
+        assert!(!s.is_incognito());
+
+        // When incognito=0: save_reading_progress inserts row
+        s.save_reading_progress("m-incog", "ch-1", 1.0, 5, 60).unwrap();
+        assert!(s.get_last_reading_progress("m-incog").unwrap().is_some());
+        assert_eq!(s.list_history(10).unwrap().len(), 1);
+
+        // last_read_at in favorites is now Some
+        let favs_live = s.library_page(0, "recent", true, 0, 0, 0, 0, None, 10, 0).unwrap();
+        assert!(favs_live[0].last_read_at.is_some());
+
+        // mark_chapter_read inserts row
+        s.mark_chapter_read("m-incog", "ch-1", 1.0, true).unwrap();
+        assert!(s.list_read_chapter_ids("m-incog").unwrap().contains("ch-1"));
     }
 }
 

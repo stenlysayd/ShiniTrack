@@ -55,7 +55,7 @@ export async function renderReader(chapterId) {
     }
     let activeMs = 0, lastTick = Date.now(), isTabVisible = !document.hidden;
 
-    const isIncognito = getPref('privacy.incognito', '0') === '1';
+    const isIncognito = () => getPref('privacy.incognito', '0') === '1';
 
     function getElapsedSec() {
       if (isTabVisible) { const now = Date.now(); activeMs += (now - lastTick); lastTick = now; }
@@ -63,7 +63,7 @@ export async function renderReader(chapterId) {
     }
     function saveProgress(pageIdx) {
       if (typeof pageIdx === 'number') curPage = pageIdx;
-      if (isIncognito) return;
+      if (isIncognito()) return;
       api.save_reading_progress({
         mangaId: data.manga_id,
         chapterId: data.chapter_id,
@@ -96,7 +96,7 @@ export async function renderReader(chapterId) {
           <button id="reader-back" class="icon-btn" aria-label="Kembali" title="Kembali">${Icons.back()}</button>
           <div style="flex:1; min-width:0; overflow:hidden;">
             <div style="font-weight:700; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff;">${utils.escapeHtml(mangaTitle || `Chapter ${data.chapter_number}`)}</div>
-            <div style="font-size:11px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter ${data.chapter_number} &bull; ${totalPages} Halaman ${data.offline ? '&bull; Offline' : ''} ${isIncognito ? '&bull; <span style="color:#ff4d4d;font-weight:600;">Penyamaran</span>' : ''}</div>
+            <div style="font-size:11px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter ${data.chapter_number} &bull; ${totalPages} Halaman ${data.offline ? '&bull; Offline' : ''} <span id="reader-incognito-badge" class="incog-pill ${isIncognito() ? '' : 'hidden'}">Penyamaran</span></div>
           </div>
           <button id="reader-bookmark-btn" class="icon-btn reader-bookmark-btn ${isBookmarked ? 'active' : ''}" aria-label="Bookmark" title="${isBookmarked ? 'Hapus Bookmark' : 'Bookmark'}">${Icons.bookmark('', isBookmarked)}</button>
           <button id="reader-menu-btn" class="icon-btn" aria-label="Menu" title="Menu">${Icons.moreVertical()}</button>
@@ -182,7 +182,7 @@ export async function renderReader(chapterId) {
     }
 
     function markChapterCompleted() {
-      if (isIncognito) return;
+      if (isIncognito()) return;
       api.mark_chapter_read({ mangaId: data.manga_id, chapterId: data.chapter_id, chapterNumber: data.chapter_number, read: true }).catch(() => {});
     }
 

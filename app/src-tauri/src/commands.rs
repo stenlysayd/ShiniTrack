@@ -830,22 +830,12 @@ pub fn save_reading_progress(
     last_page: u32,
     read_duration: u64,
 ) -> CmdResult<()> {
-    let is_incognito = ctx
-        .store
-        .lock()
-        .unwrap()
-        .kv_get("pref.privacy.incognito")
-        .ok()
-        .flatten()
-        .map(|v| v == "1")
-        .unwrap_or(false);
-    if is_incognito {
+    let store = ctx.store.lock().unwrap();
+    if store.is_incognito() {
         log::debug!("Incognito active: skipping save_reading_progress");
         return Ok(());
     }
-    ctx.store
-        .lock()
-        .unwrap()
+    store
         .save_reading_progress(
             &manga_id,
             &chapter_id,
@@ -899,22 +889,12 @@ pub fn mark_chapter_read(
     chapter_number: f64,
     read: bool,
 ) -> CmdResult<()> {
-    let is_incognito = ctx
-        .store
-        .lock()
-        .unwrap()
-        .kv_get("pref.privacy.incognito")
-        .ok()
-        .flatten()
-        .map(|v| v == "1")
-        .unwrap_or(false);
-    if is_incognito {
+    let store = ctx.store.lock().unwrap();
+    if store.is_incognito() {
         log::debug!("Incognito active: skipping mark_chapter_read");
         return Ok(());
     }
-    ctx.store
-        .lock()
-        .unwrap()
+    store
         .mark_chapter_read(&manga_id, &chapter_id, chapter_number, read)
         .map_err(err)
 }
@@ -953,22 +933,12 @@ pub fn mark_chapters_batch(
     chapters: Vec<(String, f64)>,
     read: bool,
 ) -> CmdResult<()> {
-    let is_incognito = ctx
-        .store
-        .lock()
-        .unwrap()
-        .kv_get("pref.privacy.incognito")
-        .ok()
-        .flatten()
-        .map(|v| v == "1")
-        .unwrap_or(false);
-    if is_incognito {
+    let mut store = ctx.store.lock().unwrap();
+    if store.is_incognito() {
         log::debug!("Incognito active: skipping mark_chapters_batch");
         return Ok(());
     }
-    ctx.store
-        .lock()
-        .unwrap()
+    store
         .mark_chapters_read_batch(&manga_id, &chapters, read)
         .map_err(err)
 }

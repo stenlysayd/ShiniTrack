@@ -3499,6 +3499,25 @@ body:not(.reader-active) .reader-page-overlay {
   display: block;
 }
 
+.incog-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #ff6b6b;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  vertical-align: middle;
+}
+
+.incog-badge {
+  display: inline-flex;
+  align-items: center;
+}
+
 /* --- T3 Network Diagnostics UI --- */
 .net-diag-backdrop {
   position: fixed;
