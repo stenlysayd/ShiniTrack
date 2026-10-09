@@ -3333,9 +3333,8 @@ body:not(.reader-active) .reader-page-overlay {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-faint);
-  margin-top: 10px;
-  margin-bottom: 2px;
-  padding-left: 0;
+  margin: 6px 0 0 0;
+  padding: 0;
 }
 
 .stats-hero-card {
@@ -3407,8 +3406,9 @@ body:not(.reader-active) .reader-page-overlay {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  align-items: stretch;
 }
 
 .stats-card {
@@ -3481,8 +3481,9 @@ body:not(.reader-active) .reader-page-overlay {
   font-size: 11.5px;
   color: var(--text-muted);
   margin-top: 2px;
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-height: 1.3;
-  word-break: break-word;
 }
 
 /* Incognito Badge in Topbar */
