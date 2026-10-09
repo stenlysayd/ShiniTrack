@@ -275,3 +275,12 @@ function attachEvents(list, categories, mangaCatMap, gridWrap, resetAndLoad) {
   const cancelBtn = document.getElementById('lib-sel-cancel');
   if (cancelBtn) cancelBtn.addEventListener('click', () => { selectMode = false; selectedIds.clear(); renderFavorites({ isSelectMode: true }); });
 }
+
+if (api.eventApi?.listen) {
+  api.eventApi.listen('library-refresh', () => {
+    const hash = window.location.hash;
+    if (hash.startsWith('#/library') || hash === '' || hash === '#/') {
+      renderFavorites();
+    }
+  });
+}

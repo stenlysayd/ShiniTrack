@@ -863,10 +863,12 @@ impl Store {
     }
 
     pub fn delete_history_item(&self, manga_id: &str, chapter_id: &str) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "DELETE FROM reading_progress WHERE manga_id = ?1 AND chapter_id = ?2",
             params![manga_id, chapter_id],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -989,7 +991,9 @@ impl Store {
     }
 
     pub fn clear_reading_history(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM reading_progress", [])?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM reading_progress", [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -2223,6 +2227,44 @@ mod tests {
         // Renaming to itself is allowed
         assert!(s.rename_category(c2.id, "Fantasy").is_ok());
         assert!(s.rename_category(c2.id, "Fantasy New").is_ok());
+    }
+
+    #[test]
+    fn test_delete_history_sync_with_library() {
+        let s = Store::open_in_memory().unwrap();
+
+        // Add a favorite
+        s.upsert_favorite(&Favorite {
+            manga_id: "m-sync".into(),
+            title: "Sync Manga".into(),
+            cover: None,
+            last_ch_id: None,
+            last_ch_num: None,
+            last_ch_time: None,
+            notify: true,
+            added_at: Utc::now(),
+        }).unwrap();
+
+        // Initial library page: last_read_at is None
+        let page1 = s.library_page(0, "recent", true, 0, 0, 0, 0, None, 10, 0).unwrap();
+        assert_eq!(page1.len(), 1);
+        assert_eq!(page1[0].last_read_at, None);
+
+        // Record reading progress
+        s.save_reading_progress("m-sync", "ch-100", 100.0, 10, 0).unwrap();
+
+        // Library page: last_read_at is Some
+        let page2 = s.library_page(0, "recent", true, 0, 0, 0, 0, None, 10, 0).unwrap();
+        assert_eq!(page2.len(), 1);
+        assert!(page2[0].last_read_at.is_some());
+
+        // Delete history item
+        s.delete_history_item("m-sync", "ch-100").unwrap();
+
+        // Library page: last_read_at must now be None again
+        let page3 = s.library_page(0, "recent", true, 0, 0, 0, 0, None, 10, 0).unwrap();
+        assert_eq!(page3.len(), 1);
+        assert_eq!(page3[0].last_read_at, None);
     }
 }
 

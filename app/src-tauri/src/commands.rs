@@ -1007,7 +1007,8 @@ pub fn get_reading_history(
 }
 
 #[tauri::command]
-pub fn delete_history_item(
+pub fn delete_history_item<R: Runtime>(
+    app: AppHandle<R>,
     ctx: State<'_, AppCtx>,
     manga_id: String,
     chapter_id: String,
@@ -1016,7 +1017,9 @@ pub fn delete_history_item(
         .lock()
         .unwrap()
         .delete_history_item(&manga_id, &chapter_id)
-        .map_err(err)
+        .map_err(err)?;
+    let _ = app.emit("library-refresh", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -1672,9 +1675,13 @@ pub async fn generate_crash_log(ctx: State<'_, AppCtx>) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn clear_reading_history(ctx: State<'_, AppCtx>) -> CmdResult<()> {
+pub async fn clear_reading_history<R: Runtime>(
+    app: AppHandle<R>,
+    ctx: State<'_, AppCtx>,
+) -> CmdResult<()> {
     ctx.store.lock().unwrap().clear_reading_history().map_err(err)?;
     log::info!("Reading history cleared");
+    let _ = app.emit("library-refresh", ());
     Ok(())
 }
 
