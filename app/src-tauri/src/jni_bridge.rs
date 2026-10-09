@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use jni::objects::{JByteArray, JClass, JObject, JString};
-use jni::sys::{jboolean, jstring, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jint, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
 use crate::backend;

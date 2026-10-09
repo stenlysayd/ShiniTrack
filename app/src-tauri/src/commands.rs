@@ -12,6 +12,7 @@ use shinitrack_core::predict::{predict, Prediction};
 use shinitrack_core::store::{Category, CategoryWithCount, Favorite, LibraryRow, QueueItem, StoredEvent, Store};
 use shinitrack_core::ShinigamiClient;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_notification::NotificationExt;
 
 use crate::backend::{self, Notice, ServerClient, Settings};
@@ -65,7 +66,7 @@ impl AppCtx {
     }
 }
 
-pub fn show_notices<R: Runtime>(app: &AppHandle<R>, notices: &[Notice]) {
+pub fn show_notices<R: Runtime>(_app: &AppHandle<R>, notices: &[Notice]) {
     for n in notices {
         #[cfg(target_os = "android")]
         {
@@ -75,7 +76,7 @@ pub fn show_notices<R: Runtime>(app: &AppHandle<R>, notices: &[Notice]) {
         }
         #[cfg(not(target_os = "android"))]
         {
-            if let Err(e) = app
+            if let Err(e) = _app
                 .notification()
                 .builder()
                 .id(n.id)
@@ -603,11 +604,11 @@ pub async fn set_secure_screen(ctx: State<'_, AppCtx>, secure: bool) -> CmdResul
 }
 
 #[tauri::command]
-pub async fn test_notification<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
+pub async fn test_notification<R: Runtime>(_app: AppHandle<R>) -> CmdResult<()> {
     #[cfg(debug_assertions)]
     {
         show_notices(
-            &app,
+            &_app,
             &[Notice {
                 id: 9999,
                 manga_id: "solo-leveling-ragnarok".into(),
@@ -1463,7 +1464,6 @@ pub async fn backup_create(
             let uri = store
                 .kv_get("pref.dl.export_tree_uri")
                 .map_err(err)?
-                .flatten()
                 .ok_or_else(|| "Folder ekspor unduhan belum dipilih".to_string())?;
             crate::jni_bridge::export_downloads_saf(&uri).map_err(err)?;
             return Ok(BackupResult {
