@@ -202,6 +202,22 @@ impl QueueWorker {
 
     async fn run_loop<R: Runtime>(&self, app: AppHandle<R>) {
         log::info!("Download queue worker loop started");
+        let reset_count = {
+            let ctx = app.state::<AppCtx>();
+            let store = ctx.store.lock().unwrap();
+            match store.queue_reset_downloading() {
+                Ok(count) => count,
+                Err(e) => {
+                    log::error!("Failed to reset stale downloading queue items: {e}");
+                    0
+                }
+            }
+        };
+        if reset_count > 0 {
+            log::info!("Reset {reset_count} stale downloading queue item(s)");
+            let _ = app.emit("queue-changed", ());
+        }
+
         loop {
             // Check if paused
             if self.paused.load(Ordering::SeqCst) {

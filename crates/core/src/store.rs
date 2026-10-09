@@ -1228,6 +1228,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn queue_reset_downloading(&self) -> Result<usize> {
+        let count = self.conn.execute(
+            "UPDATE download_queue SET status = 'pending' WHERE status = 'downloading'",
+            [],
+        )?;
+        Ok(count)
+    }
+
     pub fn queue_reorder(&self, chapter_ids: &[String]) -> Result<()> {
         let mut st = self.conn.prepare(
             "UPDATE download_queue SET position = ?2 WHERE chapter_id = ?1",
@@ -1855,6 +1863,41 @@ mod tests {
         assert_eq!(next4.len(), 2);
         assert_eq!(next4[1].chapter_id, "ch-4");
         assert!(next4[1].position > next4[0].position);
+    }
+
+    #[test]
+    fn queue_reset_downloading_moves_active_items_back_to_pending() {
+        let s = Store::open_in_memory().unwrap();
+        for (chapter_id, status, position) in [
+            ("ch-pending", "pending", 0),
+            ("ch-downloading-1", "downloading", 1),
+            ("ch-error", "error", 2),
+            ("ch-downloading-2", "downloading", 3),
+        ] {
+            s.queue_add(&QueueItem {
+                chapter_id: chapter_id.into(),
+                manga_id: "m-1".into(),
+                title: "Manga 1".into(),
+                chapter_number: position as f64,
+                status: status.into(),
+                position,
+                added_at: Utc::now(),
+            })
+            .unwrap();
+        }
+
+        assert_eq!(s.queue_reset_downloading().unwrap(), 2);
+        let statuses: HashMap<String, String> = s
+            .queue_list()
+            .unwrap()
+            .into_iter()
+            .map(|item| (item.chapter_id, item.status))
+            .collect();
+        assert_eq!(statuses.get("ch-pending").map(String::as_str), Some("pending"));
+        assert_eq!(statuses.get("ch-downloading-1").map(String::as_str), Some("pending"));
+        assert_eq!(statuses.get("ch-downloading-2").map(String::as_str), Some("pending"));
+        assert_eq!(statuses.get("ch-error").map(String::as_str), Some("error"));
+        assert_eq!(s.queue_reset_downloading().unwrap(), 0);
     }
 
     #[test]
