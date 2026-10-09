@@ -150,6 +150,45 @@ export async function renderMore() {
     }
   }));
 
+  // T3: DNS-over-HTTPS (DoH) preference row
+  const currentDoh = getPref('net.doh', 'auto');
+  const dohSubtitle = {
+    auto: 'Otomatis (Sistem lalu DoH Cloudflare/Google)',
+    off: 'Nonaktif (Hanya DNS sistem)',
+    cloudflare: 'Cloudflare (1.1.1.1)',
+    google: 'Google (8.8.8.8)',
+  }[currentDoh] || 'Otomatis';
+
+  container.appendChild(createListRow({
+    icon: window.Icons.globe ? window.Icons.globe() : window.Icons.settings(),
+    title: 'DNS-over-HTTPS (DoH)',
+    subtitle: dohSubtitle,
+    actionIcon: window.Icons.chevronRight(),
+    onClick: () => {
+      const opts = ['auto', 'off', 'cloudflare', 'google'];
+      const labels = ['Otomatis', 'Nonaktif', 'Cloudflare', 'Google'];
+      const curIdx = opts.indexOf(getPref('net.doh', 'auto'));
+      const nextIdx = (curIdx + 1) % opts.length;
+      const nextVal = opts[nextIdx];
+      setPref('net.doh', nextVal).then(() => {
+        showToast(`DoH diatur: ${labels[nextIdx]}`);
+        renderMore();
+      });
+    }
+  }));
+
+  // T3: Diagnosa koneksi entry
+  container.appendChild(createListRow({
+    icon: window.Icons.activity ? window.Icons.activity() : window.Icons.sync(),
+    title: 'Diagnosa koneksi',
+    subtitle: 'Uji DNS, DoH, TCP, dan HTTPS',
+    actionIcon: window.Icons.chevronRight(),
+    onClick: () => {
+      navigate('#/explore');
+      showToast('Buka katalog lalu tekan tombol Diagnosa Koneksi jika gagal');
+    }
+  }));
+
   viewEl.appendChild(container);
 }
 

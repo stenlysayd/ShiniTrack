@@ -79,14 +79,110 @@ export async function renderCatalogInto(container) {
       }
       renderCards(items);
     } catch (e) {
+      const errStr = String(e?.message || e || 'Terjadi kesalahan jaringan.');
       resEl.innerHTML = `
         <div class="empty">
           ${Icons.alertTriangle()}
           <h3>Gagal Memuat Katalog</h3>
-          <p style="margin-bottom:14px; max-width:320px;">${e}</p>
-          <button id="retry-search-btn" class="btn primary small">${Icons.sync()} Coba Lagi</button>
+          <p style="margin-bottom:14px; max-width:340px; word-break:break-word;">${utils.escapeHtml(errStr)}</p>
+          <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+            <button id="retry-search-btn" class="btn primary small">${Icons.sync()} Coba Lagi</button>
+            <button id="diag-network-btn" class="btn small">${Icons.settings ? Icons.settings() : Icons.sync()} Diagnosa Koneksi</button>
+          </div>
         </div>`;
       document.getElementById('retry-search-btn')?.addEventListener('click', () => doSearch(query));
+      document.getElementById('diag-network-btn')?.addEventListener('click', () => showNetworkDiagnosisSheet());
+    }
+  }
+
+  async function showNetworkDiagnosisSheet() {
+    const overlay = document.createElement('div');
+    overlay.className = 'net-diag-backdrop';
+    overlay.innerHTML = `
+      <div class="net-diag-sheet">
+        <div class="net-diag-header">
+          <h3 class="net-diag-title">Diagnosa Koneksi</h3>
+          <button class="net-diag-close">&times;</button>
+        </div>
+        <div id="net-diag-body">
+          <div style="text-align:center; padding:20px 0;">
+            <div class="svg-icon spin">${Icons.sync()}</div>
+            <p style="margin-top:10px; font-size:0.9rem;">Memeriksa koneksi jaringan...</p>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('.net-diag-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (ev) => {
+      if (ev.target === overlay) overlay.remove();
+    });
+
+    try {
+      const invoker = window.__TAURI__ ? window.__TAURI__.core.invoke : null;
+      if (!invoker) {
+        document.getElementById('net-diag-body').innerHTML = '<p class="net-status-err">Tidak dapat menjalankan diagnosa di luar aplikasi Tauri.</p>';
+        return;
+      }
+      const diag = await invoker('diagnose_network');
+      const checks = diag?.checks || [];
+
+      // Analyze conclusion
+      const gstatic = checks.find(c => c.host === 'www.gstatic.com');
+      const shinigamiHosts = checks.filter(c => c.host !== 'www.gstatic.com');
+
+      let conclusion = 'Semua jalur koneksi berfungsi normal.';
+      const gstaticOk = gstatic && (gstatic.https_status === 204 || (gstatic.system_dns_ips && gstatic.system_dns_ips.length > 0));
+      const shiniDnsFailed = shinigamiHosts.some(c => (!c.system_dns_ips || c.system_dns_ips.length === 0) && c.doh_ips && c.doh_ips.length > 0);
+
+      if (gstaticOk && shiniDnsFailed) {
+        conclusion = 'DNS operator memblokir domain. Aktifkan DoH di Pengaturan > Jaringan.';
+      } else if (shinigamiHosts.some(c => c.error || (c.https_status && c.https_status >= 400))) {
+        conclusion = 'Server target mengalami kendala atau menolak sambungan.';
+      } else if (!gstaticOk) {
+        conclusion = 'Tidak ada sambungan internet yang terdeteksi.';
+      }
+
+      let rowsHtml = '';
+      for (const c of checks) {
+        const sysDns = c.system_dns_ms != null ? `<span class="net-status-ok">${c.system_dns_ms}ms</span>` : '<span class="net-status-err">Gagal</span>';
+        const doh = c.doh_ms != null ? `<span class="net-status-ok">${c.doh_ms}ms</span>` : '<span class="net-status-err">Gagal</span>';
+        const tcp = c.tcp443_ms != null ? `<span class="net-status-ok">${c.tcp443_ms}ms</span>` : '<span class="net-status-err">Gagal</span>';
+        const https = c.https_status != null ? `<span class="net-status-ok">${c.https_status}</span>` : `<span class="net-status-err">${utils.escapeHtml(c.error || 'Error')}</span>`;
+
+        rowsHtml += `
+          <tr>
+            <td><strong>${utils.escapeHtml(c.host)}</strong></td>
+            <td>${sysDns}</td>
+            <td>${doh}</td>
+            <td>${tcp}</td>
+            <td>${https}</td>
+          </tr>
+        `;
+      }
+
+      document.getElementById('net-diag-body').innerHTML = `
+        <div class="net-diag-conclusion">${utils.escapeHtml(conclusion)}</div>
+        <table class="net-diag-table">
+          <thead>
+            <tr>
+              <th>Host</th>
+              <th>DNS Sys</th>
+              <th>DoH</th>
+              <th>TCP</th>
+              <th>HTTPS</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      `;
+    } catch (err) {
+      document.getElementById('net-diag-body').innerHTML = `
+        <p class="net-status-err">Gagal menjalankan diagnosa: ${utils.escapeHtml(String(err))}</p>
+      `;
     }
   }
 

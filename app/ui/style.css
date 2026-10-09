@@ -3498,3 +3498,76 @@ body:not(.reader-active) .reader-page-overlay {
 .incognito-pill svg {
   display: block;
 }
+
+/* --- T3 Network Diagnostics UI --- */
+.net-diag-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+.net-diag-sheet {
+  background: var(--surface, #1e1e24);
+  color: var(--text, #f0f0f5);
+  width: 100%;
+  max-width: 600px;
+  max-height: 85vh;
+  border-radius: 16px 16px 0 0;
+  padding: 20px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.5);
+}
+.net-diag-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.net-diag-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0;
+}
+.net-diag-close {
+  background: none;
+  border: none;
+  color: var(--text-muted, #8e8e99);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+}
+.net-diag-conclusion {
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 3px solid var(--accent, #6366f1);
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 0.88rem;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+.net-diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin-bottom: 16px;
+}
+.net-diag-table th, .net-diag-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  text-align: left;
+}
+.net-diag-table th {
+  color: var(--text-muted, #8e8e99);
+  font-weight: 500;
+}
+.net-status-ok {
+  color: #10b981;
+}
+.net-status-err {
+  color: #ef4444;
+}

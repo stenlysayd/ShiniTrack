@@ -106,6 +106,7 @@ pub fn run() {
             commands::queue_reorder,
             commands::queue_clear,
             commands::queue_retry,
+            commands::diagnose_network,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ShiniTrack");

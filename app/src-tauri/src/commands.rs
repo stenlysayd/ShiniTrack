@@ -1714,3 +1714,134 @@ mod tests {
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct NetworkCheck {
+    pub host: String,
+    pub system_dns_ms: Option<u64>,
+    pub system_dns_ips: Vec<String>,
+    pub doh_ms: Option<u64>,
+    pub doh_ips: Vec<String>,
+    pub tcp443_ms: Option<u64>,
+    pub https_status: Option<u16>,
+    pub error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct NetworkDiagnosis {
+    pub checks: Vec<NetworkCheck>,
+}
+
+async fn probe_host(host: &str) -> NetworkCheck {
+    let mut check = NetworkCheck {
+        host: host.to_string(),
+        system_dns_ms: None,
+        system_dns_ips: Vec::new(),
+        doh_ms: None,
+        doh_ips: Vec::new(),
+        tcp443_ms: None,
+        https_status: None,
+        error: None,
+    };
+
+    let timeout_dur = std::time::Duration::from_secs(6);
+
+    // 1. System DNS
+    let sys_start = std::time::Instant::now();
+    let sys_fut = tokio::net::lookup_host(format!("{}:443", host));
+    if let Ok(Ok(addrs)) = tokio::time::timeout(timeout_dur, sys_fut).await {
+        check.system_dns_ms = Some(sys_start.elapsed().as_millis() as u64);
+        check.system_dns_ips = addrs.map(|s| s.ip().to_string()).collect();
+    }
+
+    // 2. DoH (Cloudflare -> Google)
+    let doh_start = std::time::Instant::now();
+    let doh_client = reqwest::Client::builder()
+        .timeout(timeout_dur)
+        .build()
+        .unwrap_or_default();
+
+    let cf_url = format!("https://1.1.1.1/dns-query?name={}&type=A", host);
+    let mut doh_ips = Vec::new();
+    if let Ok(Ok(resp)) = tokio::time::timeout(
+        timeout_dur,
+        doh_client.get(&cf_url).header("accept", "application/dns-json").send(),
+    ).await {
+        if let Ok(text) = resp.text().await {
+            doh_ips = shinitrack_core::api::parse_doh_json(&text);
+        }
+    }
+
+    if doh_ips.is_empty() {
+        let google_url = format!("https://8.8.8.8/resolve?name={}&type=A", host);
+        if let Ok(Ok(resp)) = tokio::time::timeout(
+            timeout_dur,
+            doh_client.get(&google_url).send(),
+        ).await {
+            if let Ok(text) = resp.text().await {
+                doh_ips = shinitrack_core::api::parse_doh_json(&text);
+            }
+        }
+    }
+
+    if !doh_ips.is_empty() {
+        check.doh_ms = Some(doh_start.elapsed().as_millis() as u64);
+        check.doh_ips = doh_ips.iter().map(|ip| ip.to_string()).collect();
+    }
+
+    // 3. TCP 443 connect
+    let target_ip = check
+        .doh_ips
+        .first()
+        .or_else(|| check.system_dns_ips.first())
+        .and_then(|s| s.parse::<std::net::IpAddr>().ok());
+
+    let tcp_start = std::time::Instant::now();
+    if let Some(ip) = target_ip {
+        let tcp_fut = tokio::net::TcpStream::connect((ip, 443));
+        if let Ok(Ok(_)) = tokio::time::timeout(timeout_dur, tcp_fut).await {
+            check.tcp443_ms = Some(tcp_start.elapsed().as_millis() as u64);
+        }
+    } else {
+        let tcp_fut = tokio::net::TcpStream::connect(format!("{}:443", host));
+        if let Ok(Ok(_)) = tokio::time::timeout(timeout_dur, tcp_fut).await {
+            check.tcp443_ms = Some(tcp_start.elapsed().as_millis() as u64);
+        }
+    }
+
+    // 4. HTTPS status
+    let https_url = if host == "www.gstatic.com" {
+        "https://www.gstatic.com/generate_204".to_string()
+    } else {
+        format!("https://{}/", host)
+    };
+
+    let https_client = reqwest::Client::builder()
+        .timeout(timeout_dur)
+        .build()
+        .unwrap_or_default();
+
+    match tokio::time::timeout(timeout_dur, https_client.get(&https_url).send()).await {
+        Ok(Ok(resp)) => {
+            check.https_status = Some(resp.status().as_u16());
+        }
+        Ok(Err(e)) => {
+            check.error = Some(e.to_string());
+        }
+        Err(_) => {
+            check.error = Some("Timeout 6 detik terlampaui".to_string());
+        }
+    }
+
+    check
+}
+
+#[tauri::command]
+pub async fn diagnose_network() -> CmdResult<NetworkDiagnosis> {
+    let hosts = ["api.shngm.io", "shinigami.id", "www.gstatic.com"];
+    let mut checks = Vec::new();
+    for host in hosts {
+        checks.push(probe_host(host).await);
+    }
+    Ok(NetworkDiagnosis { checks })
+}
+
