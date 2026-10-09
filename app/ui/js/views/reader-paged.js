@@ -86,6 +86,7 @@ export function renderPagedMode(ctx) {
     const isRTL = state.readerMode === 'paged-rtl';
 
     document.getElementById('tap-left').addEventListener('click', () => {
+      if (Date.now() - lastSwipeTime < 300) return;
       if (isRTL) {
         // RTL: left tap = NEXT page
         showPagedImage(pos.idx + 1);
@@ -98,10 +99,12 @@ export function renderPagedMode(ctx) {
     });
 
     document.getElementById('tap-center').addEventListener('click', () => {
+      if (Date.now() - lastSwipeTime < 300) return;
       toggleHud();
     });
 
     document.getElementById('tap-right').addEventListener('click', () => {
+      if (Date.now() - lastSwipeTime < 300) return;
       if (isRTL) {
         // RTL: right tap = PREV page
         if (pos.idx > 0) showPagedImage(pos.idx - 1);
@@ -116,6 +119,60 @@ export function renderPagedMode(ctx) {
     // Save reading progress
     api.save_reading_progress({ mangaId: data.manga_id, chapterId: data.chapter_id, chapterNumber: data.chapter_number, lastPage: pos.idx }).catch(() => {});
   }
+
+  // T11: Swipe handling with Android edge gesture exclusion
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let isSwipeIgnored = false;
+  let lastSwipeTime = 0;
+
+  const onTouchStart = (e) => {
+    const touch = e.touches ? e.touches[0] : e;
+    const clientX = touch.clientX;
+    const clientY = touch.clientY;
+
+    // Abaikan jika clientX < 24 atau clientX > window.innerWidth - 24
+    if (clientX < 24 || clientX > window.innerWidth - 24) {
+      isSwipeIgnored = true;
+      return;
+    }
+
+    isSwipeIgnored = false;
+    touchStartX = clientX;
+    touchStartY = clientY;
+  };
+
+  const onTouchEnd = (e) => {
+    if (isSwipeIgnored) return;
+    const touch = e.changedTouches ? e.changedTouches[0] : e;
+    const deltaX = touch.clientX - touchStartX;
+    const deltaY = touch.clientY - touchStartY;
+
+    if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      lastSwipeTime = Date.now();
+      const isRTL = state.readerMode === 'paged-rtl';
+      if (deltaX < 0) {
+        // Swipe left -> Next in LTR, Prev in RTL
+        if (isRTL) {
+          if (pos.idx > 0) showPagedImage(pos.idx - 1);
+          else if (data.prev_chapter_id) navigate(`#/read/${data.prev_chapter_id}`);
+        } else {
+          showPagedImage(pos.idx + 1);
+        }
+      } else {
+        // Swipe right -> Prev in LTR, Next in RTL
+        if (isRTL) {
+          showPagedImage(pos.idx + 1);
+        } else {
+          if (pos.idx > 0) showPagedImage(pos.idx - 1);
+          else if (data.prev_chapter_id) navigate(`#/read/${data.prev_chapter_id}`);
+        }
+      }
+    }
+  };
+
+  contentEl.addEventListener('touchstart', onTouchStart, { passive: true });
+  contentEl.addEventListener('touchend', onTouchEnd, { passive: true });
 
   ctx.jumpToPage = (p) => showPagedImage(p - 1);
   showPagedImage(0);
