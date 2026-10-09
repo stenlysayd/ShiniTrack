@@ -229,6 +229,10 @@ impl Default for QueueWorker {
     }
 }
 
+pub fn reset_queue_on_startup(store: &shinitrack_core::store::Store) -> anyhow::Result<usize> {
+    Ok(store.queue_reset_downloading_to_pending()?)
+}
+
 impl QueueWorker {
     pub fn new() -> Self {
         Self {
@@ -266,6 +270,20 @@ impl QueueWorker {
 
     async fn run_loop<R: Runtime>(&self, app: AppHandle<R>) {
         log::info!("Download queue worker loop started");
+
+        // T10: Saat worker/aplikasi mulai: ubah semua baris unduhan berstatus downloading menjadi pending
+        {
+            let ctx = app.state::<AppCtx>();
+            if let Ok(store) = ctx.store.lock() {
+                if let Ok(n) = reset_queue_on_startup(&store) {
+                    if n > 0 {
+                        log::info!("Reset {n} downloading queue items to pending");
+                    }
+                }
+            }
+            let _ = app.emit("queue-changed", ());
+        }
+
         loop {
             // Check if paused
             if self.paused.load(Ordering::SeqCst) {
@@ -414,5 +432,28 @@ mod tests {
         assert_eq!(resolved_new, new_dir);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_reset_downloading_to_pending() {
+        let store = shinitrack_core::store::Store::open_in_memory().unwrap();
+        let item = shinitrack_core::store::QueueItem {
+            chapter_id: "ch-test-pending".into(),
+            manga_id: "manga-test".into(),
+            title: "Test Manga".into(),
+            chapter_number: 1.0,
+            status: "downloading".into(),
+            position: 0,
+            added_at: chrono::Utc::now(),
+        };
+        store.queue_add(&item).unwrap();
+        let list = store.queue_list().unwrap();
+        assert_eq!(list[0].status, "downloading");
+
+        let count = reset_queue_on_startup(&store).unwrap();
+        assert_eq!(count, 1);
+
+        let list_after = store.queue_list().unwrap();
+        assert_eq!(list_after[0].status, "pending");
     }
 }

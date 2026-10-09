@@ -1243,6 +1243,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn queue_reset_downloading_to_pending(&self) -> Result<usize> {
+        let changed = self.conn.execute(
+            "UPDATE download_queue SET status = 'pending' WHERE status = 'downloading'",
+            [],
+        )?;
+        Ok(changed)
+    }
+
     pub fn queue_reorder(&self, chapter_ids: &[String]) -> Result<()> {
         let mut st = self.conn.prepare(
             "UPDATE download_queue SET position = ?2 WHERE chapter_id = ?1",
