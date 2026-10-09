@@ -9,6 +9,7 @@ use std::time::{Duration as StdDuration, Instant};
 use chrono::{Duration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use shinitrack_core::detect::is_newer;
+use shinitrack_core::error::Error as CoreError;
 use shinitrack_core::models::{ChapterDetail, ChapterEvent, ChapterItem, Manga, Meta};
 use shinitrack_core::predict::{predict, Prediction};
 use shinitrack_core::store::{Category, CategoryWithCount, Favorite, LibraryRow, QueueItem, StoredEvent, Store};
@@ -23,6 +24,13 @@ pub type CmdResult<T> = Result<T, String>;
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+fn category_err(e: CoreError) -> String {
+    match e {
+        CoreError::Api { message, .. } => message,
+        other => err(other),
+    }
 }
 
 /// Tauri-managed state.
@@ -1174,7 +1182,7 @@ pub fn category_create(ctx: State<'_, AppCtx>, name: String) -> CmdResult<Catego
         .lock()
         .unwrap()
         .create_category(&name)
-        .map_err(err)
+        .map_err(category_err)
 }
 
 #[tauri::command]
@@ -1183,7 +1191,7 @@ pub fn category_rename(ctx: State<'_, AppCtx>, id: i64, name: String) -> CmdResu
         .lock()
         .unwrap()
         .rename_category(id, &name)
-        .map_err(err)
+        .map_err(category_err)
 }
 
 #[tauri::command]

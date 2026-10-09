@@ -855,6 +855,57 @@ impl Store {
 
     // -------------------------------------------------------------- categories
 
+    fn normalize_category_name(name: &str) -> Result<String> {
+        let normalized = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        if normalized.is_empty() {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama kategori tidak boleh kosong".into(),
+            });
+        }
+        if normalized.chars().count() > 40 {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama kategori maksimal 40 karakter".into(),
+            });
+        }
+        let lower = normalized.to_lowercase();
+        if matches!(lower.as_str(), "semua" | "bawaan" | "default") {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama kategori sistem tidak dapat digunakan".into(),
+            });
+        }
+        Ok(normalized)
+    }
+
+    fn category_name_exists(&self, name: &str, except_id: Option<i64>) -> Result<bool> {
+        let exists = if let Some(id) = except_id {
+            self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM category WHERE name COLLATE NOCASE = ?1 AND id <> ?2)",
+                params![name, id],
+                |r| r.get::<_, i64>(0),
+            )?
+        } else {
+            self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM category WHERE name COLLATE NOCASE = ?1)",
+                params![name],
+                |r| r.get::<_, i64>(0),
+            )?
+        };
+        Ok(exists != 0)
+    }
+
+    fn ensure_category_name_available(&self, name: &str, except_id: Option<i64>) -> Result<()> {
+        if self.category_name_exists(name, except_id)? {
+            return Err(Error::Api {
+                code: 409,
+                message: "Kategori dengan nama itu sudah ada".into(),
+            });
+        }
+        Ok(())
+    }
+
     pub fn list_categories_with_count(&self) -> Result<Vec<CategoryWithCount>> {
         let mut st = self.conn.prepare(
             r#"SELECT c.id, c.name, c.sort_order, c.flags,
@@ -879,20 +930,8 @@ impl Store {
     }
 
     pub fn create_category(&self, name: &str) -> Result<Category> {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama kategori tidak boleh kosong".into(),
-            });
-        }
-        let lower = trimmed.to_lowercase();
-        if lower == "semua" || lower == "bawaan" {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama 'Semua' dan 'Bawaan' adalah kategori sistem dan tidak dapat digunakan".into(),
-            });
-        }
+        let normalized = Self::normalize_category_name(name)?;
+        self.ensure_category_name_available(&normalized, None)?;
         let next_order: i64 = self
             .conn
             .query_row(
@@ -902,35 +941,23 @@ impl Store {
             )?;
         self.conn.execute(
             "INSERT INTO category (name, sort_order) VALUES (?1, ?2)",
-            params![trimmed, next_order],
+            params![&normalized, next_order],
         )?;
         let id = self.conn.last_insert_rowid();
         Ok(Category {
             id,
-            name: trimmed.to_string(),
+            name: normalized,
             sort_order: next_order,
             flags: 0,
         })
     }
 
     pub fn rename_category(&self, id: i64, new_name: &str) -> Result<()> {
-        let trimmed = new_name.trim();
-        if trimmed.is_empty() {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama kategori tidak boleh kosong".into(),
-            });
-        }
-        let lower = trimmed.to_lowercase();
-        if lower == "semua" || lower == "bawaan" {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama 'Semua' dan 'Bawaan' adalah kategori sistem dan tidak dapat digunakan".into(),
-            });
-        }
+        let normalized = Self::normalize_category_name(new_name)?;
+        self.ensure_category_name_available(&normalized, Some(id))?;
         self.conn.execute(
             "UPDATE category SET name = ?2 WHERE id = ?1",
-            params![id, trimmed],
+            params![id, &normalized],
         )?;
         Ok(())
     }
@@ -2158,12 +2185,30 @@ mod tests {
         assert!(s.create_category("Semua").is_err());
         assert!(s.create_category("semua").is_err());
         assert!(s.create_category("  Bawaan  ").is_err());
+        assert!(s.create_category("default").is_err());
         assert!(s.create_category("").is_err());
+        assert!(s.create_category("a".repeat(41).as_str()).is_err());
 
-        let cat = s.create_category("Action").unwrap();
+        let cat = s.create_category("  Action   Shonen  ").unwrap();
+        assert_eq!(cat.name, "Action Shonen");
+        assert!(s.create_category("action shonen").is_err());
         assert!(s.rename_category(cat.id, "Semua").is_err());
         assert!(s.rename_category(cat.id, "Bawaan").is_err());
+        assert!(s.rename_category(cat.id, "default").is_err());
+        let other = s.create_category("Romance").unwrap();
+        assert!(s.rename_category(other.id, " action   shonen ").is_err());
         assert!(s.rename_category(cat.id, "Action Shonen").is_ok());
+        s.rename_category(cat.id, "  Dark   Fantasy  ").unwrap();
+        assert_eq!(
+            s.list_categories_with_count()
+                .unwrap()
+                .into_iter()
+                .find(|c| c.category.id == cat.id)
+                .unwrap()
+                .category
+                .name,
+            "Dark Fantasy"
+        );
 
         // 2. Clear chapter cache
         let chapters = vec![
