@@ -170,6 +170,7 @@ export async function renderCategories() {
     showInputDialog({
       title: 'Tambah kategori',
       placeholder: 'Nama kategori',
+      onSubmit: async (name) => {
         try {
           await api.category_create({ name });
           showToast('Kategori ditambahkan');

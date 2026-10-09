@@ -152,6 +152,11 @@ object ShiniBridge {
     }
 
     @JvmStatic
+    fun installApk(context: Context, apkPath: String): String {
+        return triggerInstallApk(apkPath)
+    }
+
+    @JvmStatic
     fun showNotification(noticeJson: String) {
         val ctx = currentActivity ?: appContext ?: return
         try {
