@@ -22,8 +22,20 @@ class MainActivity : TauriActivity() {
         Log.i(TAG, "POST_NOTIFICATIONS granted: $isGranted")
     }
 
+    private val safLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        ShiniBridge.handleActivityResult(this, result.resultCode, result.data)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        try {
+            ShiniBridge.safLauncher = safLauncher
+        } catch (e: Throwable) {
+            Log.e(TAG, "ShiniBridge.safLauncher assignment failed", e)
+        }
 
         try {
             enableEdgeToEdge()
@@ -121,5 +133,12 @@ class MainActivity : TauriActivity() {
         }
         sendBroadcast(intent)
         Log.i(TAG, "Sent UnifiedPush registration broadcast")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (ShiniBridge.safLauncher === safLauncher) {
+            ShiniBridge.safLauncher = null
+        }
     }
 }

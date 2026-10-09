@@ -5,6 +5,93 @@ import { getPref } from '../../state.js';
 
 let activeContainer = null;
 
+function invoke(cmd, args) {
+  if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+    return window.__TAURI__.core.invoke(cmd, args);
+  }
+  return Promise.reject(new Error('Tauri API tidak tersedia'));
+}
+
+let safListenerAttached = false;
+function ensureSafListener() {
+  if (safListenerAttached) return;
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('saf-result', (event) => {
+      const { kind, ok, message, uri } = event.payload || {};
+      if (kind === 'pick_tree') {
+        if (ok && uri) {
+          api.pref_set({ key: 'storage.backup_tree_uri', value: uri }).then(() => {
+            utils.showToast(`Folder cadangan otomatis: ${message}`);
+            refreshStorageInfo();
+          });
+        } else {
+          utils.showToast(`Pilih folder: ${message}`);
+        }
+      } else if (kind === 'restore') {
+        if (ok && message) {
+          utils.showToast('Memulihkan data cadangan...');
+          invoke('backup_restore', { file_path: message, filePath: message }).then((res) => {
+            utils.showToast(res.message || 'Cadangan berhasil dipulihkan!');
+            refreshStorageInfo();
+          }).catch(err => utils.showToast(`Gagal memulihkan: ${err}`));
+        } else {
+          utils.showToast(`Batal pulihkan: ${message}`);
+        }
+      } else if (kind === 'save_backup') {
+        utils.showToast(ok ? 'Cadangan berhasil disimpan' : `Batal/Gagal simpan: ${message}`);
+      } else if (kind === 'share_backup') {
+        if (!ok) utils.showToast(`Gagal membagikan: ${message}`);
+      }
+    });
+    safListenerAttached = true;
+  }
+}
+
+function showBackupSheet(filePath) {
+  const existing = document.getElementById('backup-sheet-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'backup-sheet-overlay';
+  overlay.className = 'modal-backdrop';
+  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:9999; display:flex; align-items:flex-end; justify-content:center;';
+
+  const sheet = document.createElement('div');
+  sheet.className = 'modal-dialog';
+  sheet.style.cssText = 'background:var(--surface, #1e1e1e); width:100%; max-width:480px; border-radius:16px 16px 0 0; padding:20px; box-shadow:0 -4px 16px rgba(0,0,0,0.4); display:flex; flex-direction:column; gap:12px;';
+
+  sheet.innerHTML = `
+    <div style="font-weight:600; font-size:16px; margin-bottom:4px; color:var(--text-primary);">Berkas Cadangan Dibuat</div>
+    <div style="font-size:13px; color:var(--text-secondary); margin-bottom:8px;">Pilih tindakan untuk berkas cadangan ini:</div>
+    <button id="btn-backup-save" class="btn btn-primary" style="padding:12px; border-radius:8px; cursor:pointer;">Simpan ke…</button>
+    <button id="btn-backup-share" class="btn" style="padding:12px; border-radius:8px; background:var(--surface-elevated, #2a2a2a); color:var(--text-primary); cursor:pointer;">Bagikan</button>
+    <button id="btn-backup-cancel" class="btn" style="padding:10px; margin-top:4px; background:transparent; color:var(--text-muted); cursor:pointer;">Tutup</button>
+  `;
+
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  sheet.querySelector('#btn-backup-cancel').onclick = close;
+  sheet.querySelector('#btn-backup-save').onclick = async () => {
+    close();
+    try {
+      await invoke('backup_create', { action: 'save_saf' });
+    } catch (e) {
+      utils.showToast(`Gagal membuka dialog simpan: ${e}`);
+    }
+  };
+  sheet.querySelector('#btn-backup-share').onclick = async () => {
+    close();
+    try {
+      await invoke('backup_create', { action: 'share' });
+    } catch (e) {
+      utils.showToast(`Gagal membagikan: ${e}`);
+    }
+  };
+}
+
 function formatBytes(bytes) {
   if (!bytes || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -24,9 +111,17 @@ async function refreshStorageInfo() {
       infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${info.data_dir}<br/><span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">&bull; Folder Unduhan: downloads/&lt;Judul Komik&gt;/Chapter &lt;X&gt;<br/>&bull; Folder Cadangan: backups/ &amp; Unduhan Perangkat</span>`;
     }
 
-    // Update last backup text
+    // Auto backup warning text
     if (infoEls[1]) {
-      infoEls[1].textContent = info.last_backup
+      const parentCard = infoEls[1].closest('.settings-info-card');
+      if (parentCard) {
+        parentCard.style.display = info.backup_tree_folder ? 'none' : 'flex';
+      }
+    }
+
+    // Update last backup text
+    if (infoEls[2]) {
+      infoEls[2].textContent = info.last_backup
         ? `Terakhir dicadangkan: ${utils.formatRelativeTime(new Date(info.last_backup))}`
         : 'Terakhir dicadangkan: Belum ada data cadangan';
     }
@@ -48,6 +143,8 @@ async function refreshStorageInfo() {
       } else if (titleEl.textContent === 'Hapus cache sampul') {
         const sz = info.cover_cache_bytes != null ? info.cover_cache_bytes : 0;
         subEl.textContent = `Kosongkan cache gambar sampul manga (${formatBytes(sz)})`;
+      } else if (titleEl.textContent === 'Folder cadangan otomatis') {
+        subEl.textContent = info.backup_tree_folder || 'Belum dipilih';
       }
     });
   } catch (err) {
@@ -84,21 +181,8 @@ export const penyimpananSchema = [
       utils.showToast('Membuat cadangan...');
       try {
         const includeToken = getPref('storage.backup_include_token', '0') === '1';
-        const res = await api.backup_create({ includeToken });
-        if (res.json) {
-          const blob = new Blob([res.json], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-          a.href = url;
-          a.download = `shinitrack_backup_${dateStr}.json`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
-        utils.showToast(`Cadangan dibuat & diunduh (${res.favorites_count} komik, ${res.categories_count} kategori)`);
-        refreshStorageInfo();
+        const res = await invoke('backup_create', { includeToken, action: 'create' });
+        showBackupSheet(res.file_path);
       } catch (err) {
         utils.showToast(`Gagal membuat cadangan: ${err}`);
       }
@@ -106,36 +190,20 @@ export const penyimpananSchema = [
   },
   {
     type: 'button',
-    title: 'Pulihkan cadangan',
-    subtitle: 'Pulihkan pustaka dan preferensi dari berkas cadangan JSON',
-    icon: window.Icons && window.Icons.sync ? window.Icons.sync() : '',
-    onClick: () => {
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = '.json,application/json';
-      fileInput.style.display = 'none';
-      fileInput.onchange = (e) => {
-        const file = e.target.files && e.target.files[0];
-        if (!file) return;
-        utils.showToast('Membaca berkas cadangan...');
-        const reader = new FileReader();
-        reader.onload = async (evt) => {
-          try {
-            const json = evt.target.result;
-            const res = await api.backup_restore({ json });
-            utils.showToast(res.message || 'Cadangan berhasil dipulihkan!');
-            refreshStorageInfo();
-          } catch (err) {
-            utils.showToast(`Gagal memulihkan: ${err}`);
-          }
-        };
-        reader.onerror = () => utils.showToast('Gagal membaca berkas cadangan');
-        reader.readAsText(file);
-      };
-      document.body.appendChild(fileInput);
-      fileInput.click();
-      setTimeout(() => fileInput.remove(), 1000);
+    title: 'Folder cadangan otomatis',
+    subtitle: 'Belum dipilih',
+    icon: window.Icons && window.Icons.folder ? window.Icons.folder() : '',
+    onClick: async () => {
+      try {
+        await invoke('backup_create', { action: 'pick_tree' });
+      } catch (err) {
+        utils.showToast(`Gagal memilih folder: ${err}`);
+      }
     }
+  },
+  {
+    type: 'info',
+    text: 'Cadangan otomatis tersimpan di dalam aplikasi dan akan hilang jika aplikasi dihapus. Pilih folder agar aman.'
   },
   {
     type: 'select',
@@ -153,6 +221,42 @@ export const penyimpananSchema = [
   {
     type: 'info',
     text: 'Terakhir dicadangkan: Memuat...'
+  },
+  {
+    type: 'button',
+    title: 'Pulihkan dari berkas…',
+    subtitle: 'Pulihkan pustaka dan preferensi dari berkas cadangan JSON',
+    icon: window.Icons && window.Icons.sync ? window.Icons.sync() : '',
+    onClick: async () => {
+      try {
+        await invoke('backup_restore', { action: 'open_saf' });
+      } catch (e) {
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.json,application/json';
+        fileInput.style.display = 'none';
+        fileInput.onchange = (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          utils.showToast('Membaca berkas cadangan...');
+          const reader = new FileReader();
+          reader.onload = async (evt) => {
+            try {
+              const json = evt.target.result;
+              const res = await invoke('backup_restore', { json });
+              utils.showToast(res.message || 'Cadangan berhasil dipulihkan!');
+              refreshStorageInfo();
+            } catch (err) {
+              utils.showToast(`Gagal memulihkan: ${err}`);
+            }
+          };
+          reader.readAsText(file);
+        };
+        document.body.appendChild(fileInput);
+        fileInput.click();
+        setTimeout(() => fileInput.remove(), 1000);
+      }
+    }
   },
   {
     type: 'header',
@@ -264,6 +368,7 @@ function createStorageUsageCard() {
 }
 
 export function renderPenyimpanan() {
+  ensureSafListener();
   utils.setHeaderTitles('Data dan penyimpanan', 'Pencadangan, ruang penyimpanan');
   const viewEl = document.getElementById('view');
   if (!viewEl) return;

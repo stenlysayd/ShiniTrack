@@ -559,6 +559,10 @@ pub async fn pref_set(
     if key == "dl.wifi_only" {
         worker.wake();
     }
+    #[cfg(target_os = "android")]
+    if key == "storage.auto_backup_freq" {
+        crate::jni_bridge::reschedule_backup_worker(&value);
+    }
     Ok(())
 }
 
@@ -1135,10 +1139,15 @@ pub struct StorageInfo {
     pub database_bytes: u64,
     pub total_used_bytes: u64,
     pub last_backup: Option<String>,
+    pub backup_tree_uri: Option<String>,
+    pub backup_tree_folder: Option<String>,
 }
 
 #[tauri::command]
-pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
+pub async fn storage_info(_app: AppHandle, ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
+    #[cfg(target_os = "android")]
+    crate::jni_bridge::set_app_handle(_app);
+
     let data_dir = ctx.dir.to_string_lossy().into_owned();
     let chapter_cache_bytes = dir_size(&ctx.dir.join("cache").join("chapters"));
     let cover_cache_bytes = dir_size(&ctx.dir.join("cache").join("img"));
@@ -1157,6 +1166,18 @@ pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
     let total_used_bytes = cache_bytes + downloads_bytes + database_bytes;
     let store = ctx.store.lock().unwrap();
     let last_backup = store.kv_get("pref.storage.last_backup").ok().flatten();
+    let backup_tree_uri = store.kv_get("pref.storage.backup_tree_uri").ok().flatten();
+    let backup_tree_folder = backup_tree_uri.as_deref().and_then(|uri| {
+        #[cfg(target_os = "android")]
+        {
+            crate::jni_bridge::get_tree_folder_name(uri)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = uri;
+            Some("Folder Tersimpan".to_string())
+        }
+    });
 
     Ok(StorageInfo {
         data_dir,
@@ -1167,6 +1188,8 @@ pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
         database_bytes,
         total_used_bytes,
         last_backup,
+        backup_tree_uri,
+        backup_tree_folder,
     })
 }
 
@@ -1338,11 +1361,62 @@ pub fn create_backup_internal(
 
 #[tauri::command]
 pub async fn backup_create(
+    _app: AppHandle,
     ctx: State<'_, AppCtx>,
     include_token: Option<bool>,
+    action: Option<String>,
 ) -> CmdResult<BackupResult> {
+    #[cfg(target_os = "android")]
+    crate::jni_bridge::set_app_handle(_app);
+
+    let a = action.as_deref().unwrap_or("create");
+    if a == "pick_tree" {
+        #[cfg(target_os = "android")]
+        {
+            crate::jni_bridge::pick_saf_tree("pick_tree").map_err(err)?;
+            return Ok(BackupResult {
+                file_path: "".into(),
+                created_at: "".into(),
+                favorites_count: 0,
+                categories_count: 0,
+                json: "".into(),
+            });
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            return Err("SAF hanya didukung di Android".into());
+        }
+    }
+    if a == "pick_export_tree" {
+        #[cfg(target_os = "android")]
+        {
+            crate::jni_bridge::pick_saf_tree("pick_export_tree").map_err(err)?;
+            return Ok(BackupResult {
+                file_path: "".into(),
+                created_at: "".into(),
+                favorites_count: 0,
+                categories_count: 0,
+                json: "".into(),
+            });
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            return Err("SAF hanya didukung di Android".into());
+        }
+    }
+
     let store = ctx.store.lock().unwrap();
-    create_backup_internal(&ctx.dir, &store, include_token).map_err(err)
+    let res = create_backup_internal(&ctx.dir, &store, include_token).map_err(err)?;
+
+    if a == "save_saf" {
+        #[cfg(target_os = "android")]
+        crate::jni_bridge::save_backup_saf(&res.file_path).map_err(err)?;
+    } else if a == "share" {
+        #[cfg(target_os = "android")]
+        crate::jni_bridge::share_backup(&res.file_path).map_err(err)?;
+    }
+
+    Ok(res)
 }
 
 pub fn backup_create_headless(dir: &Path) -> anyhow::Result<BackupResult> {
@@ -1364,10 +1438,31 @@ pub struct RestoreResult {
 
 #[tauri::command]
 pub async fn backup_restore(
+    _app: AppHandle,
     ctx: State<'_, AppCtx>,
     json: Option<String>,
     file_path: Option<String>,
+    action: Option<String>,
 ) -> CmdResult<RestoreResult> {
+    #[cfg(target_os = "android")]
+    crate::jni_bridge::set_app_handle(_app);
+
+    if action.as_deref() == Some("open_saf") {
+        #[cfg(target_os = "android")]
+        {
+            crate::jni_bridge::open_restore_saf().map_err(err)?;
+            return Ok(RestoreResult {
+                favorites_restored: 0,
+                categories_restored: 0,
+                message: "Membuka dialog pemilih berkas...".into(),
+            });
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            return Err("SAF hanya didukung di Android".into());
+        }
+    }
+
     let content = if let Some(j) = json {
         j
     } else if let Some(p) = file_path {

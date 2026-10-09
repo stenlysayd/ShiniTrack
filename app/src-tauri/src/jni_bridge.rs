@@ -46,6 +46,18 @@ fn notices_json(r: anyhow::Result<Vec<backend::Notice>>) -> String {
 }
 
 static JAVA_VM: std::sync::OnceLock<jni::JavaVM> = std::sync::OnceLock::new();
+static GLOBAL_APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+pub fn set_app_handle(app: tauri::AppHandle) {
+    let _ = GLOBAL_APP_HANDLE.set(app);
+}
+
+pub fn emit_to_webview<S: serde::Serialize + Clone>(event: &str, payload: S) {
+    if let Some(app) = GLOBAL_APP_HANDLE.get() {
+        use tauri::Emitter;
+        let _ = app.emit(event, payload);
+    }
+}
 
 /// Called from `MainActivity.onCreate` before Tauri starts, and from every
 /// background entry point, so all code paths share one data directory.
@@ -340,6 +352,157 @@ pub extern "system" fn Java_id_shinitrack_app_BackupWorker_triggerBackup(
         Err(e) => {
             log::error!("BackupWorker backup failed: {e:#}");
             JNI_FALSE
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_id_shinitrack_app_BackupWorker_triggerBackupWithResult(
+    mut env: JNIEnv,
+    _this: JObject,
+    data_dir: JString,
+) -> jstring {
+    init_logging();
+    let Some(dir) = get_string(&mut env, &data_dir) else {
+        return to_jstring(&mut env, "");
+    };
+    match crate::commands::backup_create_headless(&PathBuf::from(dir)) {
+        Ok(res) => to_jstring(&mut env, &res.file_path),
+        Err(e) => {
+            log::error!("BackupWorker backup failed: {e:#}");
+            to_jstring(&mut env, "")
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_id_shinitrack_app_BackupWorker_getBackupTreeUri(
+    mut env: JNIEnv,
+    _this: JObject,
+    data_dir: JString,
+) -> jstring {
+    let Some(dir) = get_string(&mut env, &data_dir) else {
+        return to_jstring(&mut env, "");
+    };
+    let uri = shinitrack_core::store::Store::open(crate::backend::db_path(&PathBuf::from(dir)))
+        .ok()
+        .and_then(|s| s.kv_get("pref.storage.backup_tree_uri").ok().flatten())
+        .unwrap_or_default();
+    to_jstring(&mut env, &uri)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeOnSafResult(
+    mut env: JNIEnv,
+    _class: JClass,
+    kind: JString,
+    ok: jboolean,
+    message: JString,
+    uri: JString,
+) {
+    init_logging();
+    let kind = get_string(&mut env, &kind).unwrap_or_default();
+    let message = get_string(&mut env, &message).unwrap_or_default();
+    let uri = get_string(&mut env, &uri);
+    let ok = ok == JNI_TRUE;
+
+    #[derive(serde::Serialize, Clone)]
+    struct SafResultPayload {
+        kind: String,
+        ok: bool,
+        message: String,
+        uri: Option<String>,
+    }
+
+    emit_to_webview(
+        "saf-result",
+        SafResultPayload {
+            kind,
+            ok,
+            message,
+            uri,
+        },
+    );
+}
+
+pub fn save_backup_saf(file_path: &str) -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let j_path = env.new_string(file_path)?;
+    let val = env.call_static_method(
+        class,
+        "saveBackupSaf",
+        "(Ljava/lang/String;)Z",
+        &[(&j_path).into()],
+    )?;
+    Ok(val.z()?)
+}
+
+pub fn share_backup(file_path: &str) -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let j_path = env.new_string(file_path)?;
+    let val = env.call_static_method(
+        class,
+        "shareBackup",
+        "(Ljava/lang/String;)Z",
+        &[(&j_path).into()],
+    )?;
+    Ok(val.z()?)
+}
+
+pub fn pick_saf_tree(kind: &str) -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let j_kind = env.new_string(kind)?;
+    let val = env.call_static_method(
+        class,
+        "pickTree",
+        "(Ljava/lang/String;)Z",
+        &[(&j_kind).into()],
+    )?;
+    Ok(val.z()?)
+}
+
+pub fn open_restore_saf() -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let val = env.call_static_method(class, "openRestoreDocument", "()Z", &[])?;
+    Ok(val.z()?)
+}
+
+pub fn get_tree_folder_name(uri: &str) -> Option<String> {
+    let vm = JAVA_VM.get()?;
+    let mut env = vm.attach_current_thread().ok()?;
+    let class = env.find_class("id/shinitrack/app/ShiniBridge").ok()?;
+    let j_uri = env.new_string(uri).ok()?;
+    let val = env.call_static_method(
+        class,
+        "getTreeFolderName",
+        "(Ljava/lang/String;)Ljava/lang/String;",
+        &[(&j_uri).into()],
+    ).ok()?;
+    let j_str: JString = val.l().ok()?.into();
+    get_string(&mut env, &j_str)
+}
+
+pub fn reschedule_backup_worker(freq: &str) {
+    if let Some(vm) = JAVA_VM.get() {
+        if let Ok(mut env) = vm.attach_current_thread() {
+            if let Ok(class) = env.find_class("id/shinitrack/app/ShiniBridge") {
+                if let Ok(j_freq) = env.new_string(freq) {
+                    let _ = env.call_static_method(
+                        class,
+                        "rescheduleBackupWorker",
+                        "(Ljava/lang/String;)V",
+                        &[(&j_freq).into()],
+                    );
+                }
+            }
         }
     }
 }
