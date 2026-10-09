@@ -155,18 +155,38 @@ pub async fn check_github_release(
 pub fn mock_update_info(current_version: &str) -> UpdateInfo {
     UpdateInfo {
         current_version: current_version.to_string(),
-        latest_version: "v0.2.3".to_string(),
-        update_available: true,
-        release_name: "ShiniTrack v0.2.3 - Mihon UX Edition".to_string(),
-        release_notes: "### Pembaruan v0.2.3\n- Perbaikan installer APK & izin install unknown sources otomatis\n- Notifikasi rich ala Mihon dengan cover art dan tombol aksi\n- Sinkronisasi URL target repository GitHub yang tepat".to_string(),
+        latest_version: current_version.to_string(),
+        update_available: false,
+        release_name: "ShiniTrack".to_string(),
+        release_notes: String::new(),
         published_at: chrono::Utc::now().to_rfc3339(),
-        download_url: Some(
-            "https://github.com/stenlysayd/ShiniTrack/releases/download/v0.2.3/ShiniTrack-v0.2.3.apk"
-                .to_string(),
-        ),
-        apk_name: Some("ShiniTrack-v0.2.3.apk".to_string()),
-        apk_size: Some(15980958),
+        download_url: None,
+        apk_name: None,
+        apk_size: None,
         html_url: "https://github.com/stenlysayd/ShiniTrack/releases".to_string(),
+    }
+}
+
+pub fn append_log_to_dir(dir: &std::path::Path, message: &str) {
+    let log_path = dir.join("shinitrack.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        use std::io::Write;
+        let _ = writeln!(file, "[{}] {}", chrono::Local::now().to_rfc3339(), message);
+    }
+}
+
+#[cfg(target_os = "android")]
+pub fn append_android_log(message: &str) {
+    if let Some(dir) = crate::backend::data_dir_override() {
+        append_log_to_dir(&dir, message);
+    }
+}
+
+fn append_app_log<R: Runtime>(app: &AppHandle<R>, message: &str) {
+    if let Some(dir) = crate::backend::data_dir_override().or_else(|| app.path().app_data_dir().ok()) {
+        append_log_to_dir(&dir, message);
+    } else {
+        log::info!("{message}");
     }
 }
 
@@ -176,7 +196,9 @@ pub async fn download_and_install_apk<R: Runtime>(
 ) -> anyhow::Result<InstallOutcome> {
     let client = reqwest::Client::builder()
         .user_agent(format!("ShiniTrack-App/{CURRENT_APP_VERSION}"))
+        .timeout(std::time::Duration::from_secs(60))
         .build()?;
+    append_app_log(app, "Mulai memeriksa URL APK pembaruan");
     let mut res = client.get(download_url).send().await?.error_for_status()?;
     let total_size = res.content_length().unwrap_or(0);
 
@@ -187,8 +209,11 @@ pub async fn download_and_install_apk<R: Runtime>(
     let updates_dir = cache_dir.join("updates");
     tokio::fs::create_dir_all(&updates_dir).await?;
     let target_path = updates_dir.join("shinitrack-update.apk");
+    let part_path = updates_dir.join("shinitrack-update.apk.part");
+    let _ = tokio::fs::remove_file(&part_path).await;
 
-    let mut file = tokio::fs::File::create(&target_path).await?;
+    append_app_log(app, "Mulai mengunduh APK pembaruan");
+    let mut file = tokio::fs::File::create(&part_path).await?;
     let mut downloaded: u64 = 0;
     let mut last_progress: u8 = 255;
 
@@ -200,12 +225,13 @@ pub async fn download_and_install_apk<R: Runtime>(
         } else {
             0
         };
-        if progress != last_progress || downloaded >= total_size {
-            last_progress = progress;
+        let progress_before_install = progress.min(99);
+        if progress_before_install != last_progress {
+            last_progress = progress_before_install;
             let _ = app.emit(
                 "update-download-progress",
                 DownloadProgressPayload {
-                    progress,
+                    progress: progress_before_install,
                     downloaded_bytes: downloaded,
                     total_bytes: total_size,
                 },
@@ -215,11 +241,34 @@ pub async fn download_and_install_apk<R: Runtime>(
     tokio::io::AsyncWriteExt::flush(&mut file).await?;
     drop(file);
 
+    if total_size > 0 && downloaded != total_size {
+        append_app_log(app, "Unduhan APK gagal: ukuran berkas tidak cocok");
+        anyhow::bail!("Ukuran unduhan tidak cocok");
+    }
+
+    append_app_log(app, "Memindahkan APK pembaruan ke berkas final");
+    let _ = tokio::fs::remove_file(&target_path).await;
+    tokio::fs::rename(&part_path, &target_path).await?;
+
+    let _ = app.emit(
+        "update-download-progress",
+        DownloadProgressPayload {
+            progress: 100,
+            downloaded_bytes: downloaded,
+            total_bytes: total_size,
+        },
+    );
+
     let path_str = target_path.to_string_lossy().into_owned();
     log::info!("Update APK downloaded to: {path_str}");
 
+    append_app_log(app, "Memulai penginstal APK pembaruan");
     let mut outcome = install_apk_file(&path_str)?;
     outcome.file_path = path_str;
+    append_app_log(
+        app,
+        &format!("Hasil penginstal APK: success={}, needs_permission={}", outcome.success, outcome.needs_permission),
+    );
     Ok(outcome)
 }
 

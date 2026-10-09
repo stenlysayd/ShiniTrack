@@ -101,67 +101,69 @@ object ShiniBridge {
 
     @JvmStatic
     fun triggerInstallApk(apkPath: String): String {
-        val ctx = currentActivity ?: appContext
-        if (ctx == null) {
-            Log.e(TAG, "Cannot install APK: context is null")
-            return JSONObject().apply {
-                put("success", false)
-                put("needsPermission", false)
-                put("message", "Context aplikasi tidak tersedia.")
-            }.toString()
+        return try {
+            val ctx = appContext ?: currentActivity?.applicationContext
+            if (ctx == null) {
+                installResult(false, false, "Context aplikasi tidak tersedia.", apkPath)
+            } else {
+                installApk(ctx.applicationContext, apkPath)
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "triggerInstallApk failed", e)
+            installResult(false, false, "Gagal membuka penginstal: ${e.message ?: e.javaClass.simpleName}", apkPath)
         }
-        return installApk(ctx, apkPath)
+    }
+
+    private fun installResult(success: Boolean, needsPermission: Boolean, message: String, filePath: String): String {
+        return JSONObject().apply {
+            put("success", success)
+            put("needsPermission", needsPermission)
+            put("message", message)
+            put("file_path", filePath)
+        }.toString()
     }
 
     fun installApk(context: Context, apkPath: String): String {
-        val result = JSONObject()
-        val file = File(apkPath)
-        if (!file.exists()) {
-            Log.e(TAG, "APK file does not exist: $apkPath")
-            result.put("success", false)
-            result.put("needsPermission", false)
-            result.put("message", "File APK tidak ditemukan: $apkPath")
-            return result.toString()
-        }
-
-        // Check REQUEST_INSTALL_PACKAGES on Android O (API 26+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!context.packageManager.canRequestPackageInstalls()) {
-                Log.w(TAG, "REQUEST_INSTALL_PACKAGES not granted. Launching unknown sources settings.")
-                pendingApkPath = apkPath
-                requestInstallPermission()
-                result.put("success", false)
-                result.put("needsPermission", true)
-                result.put("message", "Izin Diperlukan: Aktifkan 'Izinkan dari sumber ini' di pengaturan Android yang terbuka, lalu ketuk 'Pasang Pembaruan'.")
-                return result.toString()
-            }
-        }
-
         return try {
-            file.setReadable(true, false)
+            val ctx = context.applicationContext
+            val file = File(apkPath)
+            if (!file.exists() || !file.isFile || file.length() <= 0L) {
+                Log.e(TAG, "APK file does not exist or is empty: $apkPath")
+                return installResult(false, false, "File APK tidak ditemukan atau kosong: $apkPath", apkPath)
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ctx.packageManager.canRequestPackageInstalls()) {
+                Log.w(TAG, "REQUEST_INSTALL_PACKAGES not granted. Launching unknown sources settings")
+                pendingApkPath = apkPath
+                val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = Uri.parse("package:${ctx.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(settingsIntent)
+                return installResult(
+                    false,
+                    true,
+                    "Aktifkan izin pasang aplikasi dari ShiniTrack, lalu ketuk Pasang Pembaruan lagi.",
+                    apkPath
+                )
+            }
+
             val apkUri = androidx.core.content.FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
+                ctx,
+                "id.shinitrack.app.fileprovider",
                 file
             )
-            val targetContext = currentActivity ?: context
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
-            targetContext.startActivity(intent)
+            ctx.startActivity(intent)
             Log.i(TAG, "Successfully started package installer intent for $apkPath")
-            result.put("success", true)
-            result.put("needsPermission", false)
-            result.put("message", "Membuka penginstal paket Android...")
-            result.toString()
+            installResult(true, false, "Membuka penginstal paket Android...", apkPath)
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to launch package installer for $apkPath", e)
-            result.put("success", false)
-            result.put("needsPermission", false)
-            result.put("message", "Gagal membuka penginstal: ${e.message}")
-            result.toString()
+            installResult(false, false, "Gagal membuka penginstal: ${e.message ?: e.javaClass.simpleName}", apkPath)
         }
     }
 

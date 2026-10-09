@@ -604,10 +604,10 @@ pub async fn test_notification<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
         &app,
         &[Notice {
             id: 9999,
-            manga_id: "solo-leveling-ragnarok".into(),
-            title: "Solo Leveling: Ragnarok".into(),
-            text: "Chapter 35 telah rilis! Ketuk untuk membaca langsung.".into(),
-            cover: Some("https://shinigami.asia/media/covers/solo-leveling-ragnarok.jpg".into()),
+            manga_id: "uji-notifikasi".into(),
+            title: "Notifikasi Uji".into(),
+            text: "Notifikasi uji berhasil dikirim.".into(),
+            cover: None,
         }],
     );
     Ok(())
@@ -747,9 +747,13 @@ pub async fn check_app_update(
         .unwrap_or_else(|| "stenlysayd/ShiniTrack".into());
 
     let repo_to_use = crate::updater::clean_github_repo(&repo_raw);
-    crate::updater::check_github_release(&repo_to_use, crate::updater::CURRENT_APP_VERSION)
-        .await
-        .map_err(err)
+    match crate::updater::check_github_release(&repo_to_use, crate::updater::CURRENT_APP_VERSION).await {
+        Ok(info) => Ok(info),
+        Err(e) => {
+            log::warn!("update check failed for {repo_to_use}: {e:#}");
+            Err("Tidak dapat memeriksa pembaruan".into())
+        }
+    }
 }
 
 #[tauri::command]

@@ -47,6 +47,32 @@ fn notices_json(r: anyhow::Result<Vec<backend::Notice>>) -> String {
 
 static JAVA_VM: std::sync::OnceLock<jni::JavaVM> = std::sync::OnceLock::new();
 
+fn java_call<T>(
+    env: &mut JNIEnv,
+    result: jni::errors::Result<T>,
+    context: &str,
+) -> anyhow::Result<T> {
+    let value = match result {
+        Ok(value) => value,
+        Err(e) => {
+            if matches!(env.exception_check(), Ok(true)) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+            }
+            anyhow::bail!("{context}: {e}");
+        }
+    };
+    match env.exception_check() {
+        Ok(true) => {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            anyhow::bail!("{context}: exception Java");
+        }
+        Ok(false) => Ok(value),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Called from `MainActivity.onCreate` before Tauri starts, and from every
 /// background entry point, so all code paths share one data directory.
 #[no_mangle]
@@ -67,41 +93,62 @@ pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeInit(
 pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<crate::updater::InstallOutcome> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
-    let j_path = env.new_string(apk_path)?;
-    let val = env.call_static_method(
-        class,
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let j_path_res = env.new_string(apk_path);
+    let j_path = java_call(&mut env, j_path_res, "create APK path string")?;
+    let val_res = env.call_static_method(
+        &class,
         "triggerInstallApk",
         "(Ljava/lang/String;)Ljava/lang/String;",
         &[(&j_path).into()],
-    )?;
-    let j_str: JString = val.l()?.into();
-    let json = get_string(&mut env, &j_str).unwrap_or_default();
-    let outcome: crate::updater::InstallOutcome = serde_json::from_str(&json).unwrap_or(
-        crate::updater::InstallOutcome {
+    );
+    let val = java_call(&mut env, val_res, "call triggerInstallApk")?;
+    let j_obj = val.l().map_err(|e| anyhow::anyhow!("read triggerInstallApk result: {e}"))?;
+    if j_obj.is_null() {
+        crate::updater::append_android_log("Install APK gagal: Java mengembalikan null");
+        return Ok(crate::updater::InstallOutcome {
             success: false,
             needs_permission: false,
             message: "Gagal memproses hasil instalasi".into(),
             file_path: apk_path.to_string(),
-        },
-    );
+        });
+    }
+    let j_str: JString = j_obj.into();
+    let json = get_string(&mut env, &j_str).unwrap_or_default();
+    let outcome: crate::updater::InstallOutcome = match serde_json::from_str(&json) {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            crate::updater::append_android_log(&format!("Install APK gagal: hasil JSON tidak valid: {e}"));
+            crate::updater::InstallOutcome {
+                success: false,
+                needs_permission: false,
+                message: "Gagal memproses hasil instalasi".into(),
+                file_path: apk_path.to_string(),
+            }
+        }
+    };
     Ok(outcome)
 }
 
 pub fn can_install_packages() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
-    let val = env.call_static_method(class, "canInstallPackages", "()Z", &[])?;
-    Ok(val.z()?)
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let val_res = env.call_static_method(&class, "canInstallPackages", "()Z", &[]);
+    let val = java_call(&mut env, val_res, "call canInstallPackages")?;
+    val.z().map_err(|e| e.into())
 }
 
 pub fn request_install_permission() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
-    let val = env.call_static_method(class, "requestInstallPermission", "()Z", &[])?;
-    Ok(val.z()?)
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let val_res = env.call_static_method(&class, "requestInstallPermission", "()Z", &[]);
+    let val = java_call(&mut env, val_res, "call requestInstallPermission")?;
+    val.z().map_err(|e| e.into())
 }
 
 pub fn is_wifi_connected() -> anyhow::Result<bool> {
