@@ -1724,8 +1724,12 @@ pub async fn generate_crash_log(ctx: State<'_, AppCtx>) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn clear_reading_history(ctx: State<'_, AppCtx>) -> CmdResult<()> {
+pub async fn clear_reading_history<R: Runtime>(
+    app: AppHandle<R>,
+    ctx: State<'_, AppCtx>,
+) -> CmdResult<()> {
     ctx.store.lock().unwrap().clear_reading_history().map_err(err)?;
+    let _ = app.emit("library-refresh", ());
     log::info!("Reading history cleared");
     Ok(())
 }

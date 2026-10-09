@@ -13,6 +13,7 @@ let selectMode = false;
 let selectedIds = new Set();
 
 const PAGE_SIZE = 30;
+let libraryRefreshUnlisten = null;
 
 // Re-export for detail-events usage
 export { showCategoryAssignDialog } from './library-helpers.js';
@@ -20,6 +21,7 @@ export { showCategoryAssignDialog } from './library-helpers.js';
 // ================================================================= VIEW: LIBRARY
 
 export async function renderFavorites(opts = {}) {
+  ensureLibraryRefreshListener();
   setHeaderTitles('Pustaka', 'Koleksi Komik Favorit');
   viewEl.innerHTML = `<div class="empty"><div class="svg-icon spin">${Icons.sync()}</div><p style="margin-top:12px;">Memuat library favorit...</p></div>`;
 
@@ -140,6 +142,19 @@ export async function renderFavorites(opts = {}) {
     attachEvents(totalList, categories, mangaCatMap, gridWrap, resetAndLoad);
   } catch (err) {
     viewEl.innerHTML = `<div class="empty">${Icons.alertTriangle()}<h3>Gagal Memuat Library</h3><p>${err}</p></div>`;
+  }
+}
+
+async function ensureLibraryRefreshListener() {
+  if (libraryRefreshUnlisten || !api.eventApi || !api.eventApi.listen) return;
+  try {
+    libraryRefreshUnlisten = await api.eventApi.listen('library-refresh', () => {
+      if ((window.location.hash || '#/library').startsWith('#/library')) {
+        renderFavorites({ isFilter: true });
+      }
+    });
+  } catch (err) {
+    console.warn('Failed to listen to library-refresh:', err);
   }
 }
 

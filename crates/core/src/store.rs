@@ -974,7 +974,24 @@ impl Store {
     }
 
     pub fn clear_reading_history(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM reading_progress", [])?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM reading_progress", [])?;
+        let has_favorite_last_read_at = {
+            let mut st = tx.prepare("PRAGMA table_info(favorites)")?;
+            let columns = st.query_map([], |r| r.get::<_, String>(1))?;
+            let mut found = false;
+            for column in columns {
+                if column? == "last_read_at" {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if has_favorite_last_read_at {
+            tx.execute("UPDATE favorites SET last_read_at = NULL", [])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1766,6 +1783,73 @@ mod tests {
         assert_eq!(meta_fav.as_deref(), Some("Fav Manga"));
         let meta_orphan = s.conn.query_row("SELECT title FROM manga_meta WHERE manga_id = 'orphan-manga'", [], |r| r.get::<_, String>(0)).ok();
         assert_eq!(meta_orphan, None);
+    }
+
+    #[test]
+    fn clear_reading_history_clears_library_last_read_state() {
+        let s = Store::open_in_memory().unwrap();
+        let f = Favorite {
+            manga_id: "m-1".into(),
+            title: "Manga 1".into(),
+            cover: None,
+            last_ch_id: None,
+            last_ch_num: Some(1.0),
+            last_ch_time: None,
+            notify: true,
+            added_at: Utc::now(),
+        };
+        s.upsert_favorite(&f).unwrap();
+        s.save_reading_progress("m-1", "ch-1", 1.0, 8, 60).unwrap();
+        assert!(s
+            .library_page(0, "recent", true, 0, 0, 1, 0, None, 30, 0)
+            .unwrap()
+            .iter()
+            .any(|row| row.manga_id == "m-1" && row.last_read_at.is_some()));
+
+        s.clear_reading_history().unwrap();
+        let rows = s.library_page(0, "recent", true, 0, 0, 0, 0, None, 30, 0).unwrap();
+        let row = rows.iter().find(|row| row.manga_id == "m-1").unwrap();
+        assert!(row.last_read_at.is_none());
+        assert!(s
+            .library_page(0, "recent", true, 0, 0, 1, 0, None, 30, 0)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn clear_reading_history_nulls_legacy_favorites_last_read_at_column() {
+        let s = Store::open_in_memory().unwrap();
+        s.conn
+            .execute("ALTER TABLE favorites ADD COLUMN last_read_at TEXT", [])
+            .unwrap();
+        let f = Favorite {
+            manga_id: "m-legacy".into(),
+            title: "Legacy Manga".into(),
+            cover: None,
+            last_ch_id: None,
+            last_ch_num: Some(1.0),
+            last_ch_time: None,
+            notify: true,
+            added_at: Utc::now(),
+        };
+        s.upsert_favorite(&f).unwrap();
+        s.conn
+            .execute(
+                "UPDATE favorites SET last_read_at = ?2 WHERE manga_id = ?1",
+                params!["m-legacy", Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+
+        s.clear_reading_history().unwrap();
+        let last_read_at: Option<String> = s
+            .conn
+            .query_row(
+                "SELECT last_read_at FROM favorites WHERE manga_id = ?1",
+                ["m-legacy"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(last_read_at, None);
     }
 
     #[test]
