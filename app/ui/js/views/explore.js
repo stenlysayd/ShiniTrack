@@ -2,6 +2,7 @@ import { state } from '../state.js';
 import { navigate } from '../router.js';
 import * as utils from '../utils.js';
 import * as api from '../api.js';
+import { createBottomSheet } from '../components/bottom-sheet.js';
 
 const { setHeaderTitles, coverUrl, showToast } = utils;
 const viewEl = document.getElementById('view');
@@ -79,14 +80,19 @@ export async function renderCatalogInto(container) {
       }
       renderCards(items);
     } catch (e) {
+      const message = String(e);
       resEl.innerHTML = `
         <div class="empty">
           ${Icons.alertTriangle()}
           <h3>Gagal Memuat Katalog</h3>
-          <p style="margin-bottom:14px; max-width:320px;">${e}</p>
-          <button id="retry-search-btn" class="btn primary small">${Icons.sync()} Coba Lagi</button>
+          <p style="margin-bottom:14px; max-width:320px;">${utils.escapeHtml(message)}</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;">
+            <button id="retry-search-btn" class="btn primary small">${Icons.sync()} Coba Lagi</button>
+            <button id="diagnose-network-btn" class="btn small">${Icons.activity ? Icons.activity() : (Icons.info ? Icons.info() : '')} Diagnosa koneksi</button>
+          </div>
         </div>`;
       document.getElementById('retry-search-btn')?.addEventListener('click', () => doSearch(query));
+      document.getElementById('diagnose-network-btn')?.addEventListener('click', () => openNetworkDiagnosisSheet(message));
     }
   }
 
@@ -159,6 +165,75 @@ export async function renderCatalogInto(container) {
   });
 
   doSearch('');
+}
+
+function diagnosisConclusion(checks) {
+  const control = checks.find(c => c.host === 'www.gstatic.com');
+  const shinigami = checks.find(c => c.host.includes('shngm') || c.host.includes('shinigami'));
+  const controlOk = control && control.https_status && control.https_status >= 200 && control.https_status < 400;
+  if (
+    controlOk &&
+    shinigami &&
+    (!shinigami.system_dns_ips || shinigami.system_dns_ips.length === 0) &&
+    shinigami.doh_ips &&
+    shinigami.doh_ips.length > 0
+  ) {
+    return 'DNS operator memblokir domain. Aktifkan DoH di Pengaturan.';
+  }
+  if (controlOk) return 'Koneksi umum tersedia. Jika katalog tetap gagal, coba lagi beberapa saat.';
+  return 'Koneksi internet perangkat bermasalah atau sedang diblokir.';
+}
+
+function formatMs(value) {
+  return value === null || value === undefined ? '-' : `${value} ms`;
+}
+
+async function openNetworkDiagnosisSheet(originalMessage) {
+  const content = document.createElement('div');
+  content.style.maxHeight = '70vh';
+  content.style.overflow = 'auto';
+  content.innerHTML = `
+    <h3 style="margin:0 0 8px;">Diagnosa koneksi</h3>
+    <p class="s" style="margin:0 0 12px;">${utils.escapeHtml(originalMessage)}</p>
+    <div class="empty" style="padding:18px 0;"><div class="svg-icon spin">${Icons.sync()}</div><p>Memeriksa jaringan...</p></div>
+  `;
+  createBottomSheet({ content });
+  try {
+    const report = await api.diagnose_network();
+    const checks = Array.isArray(report?.checks) ? report.checks : [];
+    const rows = checks.map(c => `
+      <tr>
+        <td>${utils.escapeHtml(c.host)}</td>
+        <td>${formatMs(c.system_dns_ms)}<br><span class="s">${utils.escapeHtml((c.system_dns_ips || []).join(', ') || '-')}</span></td>
+        <td>${formatMs(c.doh_ms)}<br><span class="s">${utils.escapeHtml((c.doh_ips || []).join(', ') || '-')}</span></td>
+        <td>${formatMs(c.tcp443_ms)}</td>
+        <td>${c.https_status || '-'}</td>
+      </tr>
+    `).join('');
+    content.innerHTML = `
+      <h3 style="margin:0 0 8px;">Diagnosa koneksi</h3>
+      <p style="margin:0 0 12px;">${utils.escapeHtml(diagnosisConclusion(checks))}</p>
+      <div style="overflow:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="text-align:left;color:var(--text-muted);">
+              <th style="padding:8px;border-bottom:1px solid var(--border);">Host</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">DNS sistem</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">DoH</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">TCP 443</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">HTTPS</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    content.innerHTML = `
+      <h3 style="margin:0 0 8px;">Diagnosa koneksi</h3>
+      <p>Gagal menjalankan diagnosa: ${utils.escapeHtml(String(err))}</p>
+    `;
+  }
 }
 
 export async function renderScheduleInto(container) {

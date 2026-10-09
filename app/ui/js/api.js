@@ -7,6 +7,7 @@ export const eventApi = window.__TAURI__ ? window.__TAURI__.event : null;
 export async function settings_get() { return invoke('settings_get'); }
 export async function pref_get_all() { return invoke('pref_get_all'); }
 export async function pref_set(args) { return invoke('pref_set', args); }
+export async function diagnose_network() { return invoke('diagnose_network'); }
 export async function sync_now() { return invoke('sync_now'); }
 export async function recent_events() { return invoke('recent_events'); }
 export async function install_downloaded_apk(args) { return invoke('install_downloaded_apk', args); }

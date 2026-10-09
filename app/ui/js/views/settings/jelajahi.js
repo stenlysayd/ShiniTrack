@@ -34,6 +34,22 @@ export const jelajahiSchema = [
   },
   {
     type: 'header',
+    title: 'Koneksi'
+  },
+  {
+    type: 'select',
+    key: 'net.doh',
+    title: 'DNS-over-HTTPS',
+    options: [
+      { value: 'auto', label: 'Otomatis' },
+      { value: 'off', label: 'Mati' },
+      { value: 'cloudflare', label: 'Cloudflare' },
+      { value: 'google', label: 'Google' }
+    ],
+    default: 'auto'
+  },
+  {
+    type: 'header',
     title: 'Urutan Katalog'
   },
   {

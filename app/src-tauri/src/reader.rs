@@ -17,7 +17,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::AppCtx;
 
-const ALLOWED_HOST_SUFFIXES: &[&str] = &["shngm.id", "shngm.io", "shinigami.id", "shinigami.asia"];
+pub(crate) const ALLOWED_HOST_SUFFIXES: &[&str] = &["shngm.id", "shngm.io", "shinigami.id", "shinigami.asia"];
 
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();

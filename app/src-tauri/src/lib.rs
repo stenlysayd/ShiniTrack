@@ -55,6 +55,7 @@ pub fn run() {
             commands::settings_set,
             commands::pref_get_all,
             commands::pref_set,
+            commands::diagnose_network,
             commands::update_worker_interval,
             commands::set_keep_awake,
             commands::set_secure_screen,

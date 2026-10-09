@@ -1,9 +1,12 @@
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::header::{HeaderMap, HeaderValue, REFERER};
 use serde::de::DeserializeOwned;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, HttpErrorKind, Result};
 use crate::models::{ChapterDetail, ChapterItem, Envelope, Manga, Meta, Page};
 
 pub const DEFAULT_BASE: &str = "https://api.shngm.io/v1";
@@ -18,6 +21,7 @@ pub const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36
 pub struct ShinigamiClient {
     http: reqwest::Client,
     base: String,
+    doh_mode: Arc<RwLock<String>>,
 }
 
 impl ShinigamiClient {
@@ -26,24 +30,42 @@ impl ShinigamiClient {
     }
 
     pub fn with_base(base: impl Into<String>) -> Result<Self> {
+        let doh_mode = Arc::new(RwLock::new("auto".to_string()));
         let mut headers = HeaderMap::new();
         headers.insert(REFERER, HeaderValue::from_static(SITE_REFERER));
+        let resolver = Arc::new(DohResolver::new(doh_mode.clone())?);
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .default_headers(headers)
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(35))
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(30))
+            .dns_resolver(resolver)
             .gzip(true)
             .build()?;
         Ok(Self {
             http,
             base: base.into().trim_end_matches('/').to_string(),
+            doh_mode,
         })
     }
 
     /// The underlying HTTP client (already carries the required `Referer`).
     pub fn http(&self) -> &reqwest::Client {
         &self.http
+    }
+
+    pub fn set_doh_mode(&self, mode: &str) {
+        let normalized = match mode {
+            "off" | "cloudflare" | "google" => mode,
+            _ => "auto",
+        };
+        if let Ok(mut current) = self.doh_mode.write() {
+            *current = normalized.to_string();
+        }
+    }
+
+    pub fn base_host(&self) -> Option<String> {
+        host_from_url(&self.base).map(|s| s.to_string())
     }
 
     async fn get<T: DeserializeOwned>(
@@ -60,20 +82,32 @@ impl ShinigamiClient {
             let resp = match self.http.get(&url).query(query).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    last_err = Some(Error::Http(e));
-                    continue;
+                    let err = Error::from(e);
+                    if attempt == 0 && should_retry(&err) {
+                        last_err = Some(err);
+                        continue;
+                    }
+                    return Err(err);
                 }
             };
             let status = resp.status();
             if !status.is_success() {
-                last_err = Some(Error::Status(status.as_u16()));
-                continue;
+                let err = Error::Status(status.as_u16());
+                if attempt == 0 && should_retry(&err) {
+                    last_err = Some(err);
+                    continue;
+                }
+                return Err(err);
             }
             let env: Envelope<T> = match resp.json().await {
                 Ok(env) => env,
                 Err(e) => {
-                    last_err = Some(Error::Http(e));
-                    continue;
+                    let err = Error::from(e);
+                    if attempt == 0 && should_retry(&err) {
+                        last_err = Some(err);
+                        continue;
+                    }
+                    return Err(err);
                 }
             };
             if env.retcode != 0 {
@@ -153,24 +187,243 @@ impl ShinigamiClient {
             let resp = match self.http.get(url).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    last_err = Some(Error::Http(e));
-                    continue;
+                    let err = Error::from(e);
+                    if attempt == 0 && should_retry(&err) {
+                        last_err = Some(err);
+                        continue;
+                    }
+                    return Err(err);
                 }
             };
             let status = resp.status();
             if !status.is_success() {
-                last_err = Some(Error::Status(status.as_u16()));
-                continue;
+                let err = Error::Status(status.as_u16());
+                if attempt == 0 && should_retry(&err) {
+                    last_err = Some(err);
+                    continue;
+                }
+                return Err(err);
             }
             match resp.bytes().await {
                 Ok(b) => return Ok(b.to_vec()),
                 Err(e) => {
-                    last_err = Some(Error::Http(e));
-                    continue;
+                    let err = Error::from(e);
+                    if attempt == 0 && should_retry(&err) {
+                        last_err = Some(err);
+                        continue;
+                    }
+                    return Err(err);
                 }
             }
         }
         Err(last_err.unwrap_or(Error::Empty))
+    }
+}
+
+fn should_retry(err: &Error) -> bool {
+    match err {
+        Error::Status(code) => *code >= 500,
+        Error::Http(e) => matches!(
+            e.kind(),
+            HttpErrorKind::Dns | HttpErrorKind::Connect | HttpErrorKind::Timeout
+        ),
+        _ => false,
+    }
+}
+
+fn host_from_url(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    rest.split(['/', ':', '?']).next()
+}
+
+#[derive(Clone)]
+pub struct DohResolver {
+    mode: Arc<RwLock<String>>,
+    client: reqwest::Client,
+}
+
+impl DohResolver {
+    pub fn new(mode: Arc<RwLock<String>>) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(5))
+            .build()?;
+        Ok(Self { mode, client })
+    }
+
+    fn mode(&self) -> String {
+        self.mode
+            .read()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| "auto".to_string())
+    }
+}
+
+impl Resolve for DohResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().trim_end_matches('.').to_string();
+        let mode = self.mode();
+        let client = self.client.clone();
+        Box::pin(async move {
+            let ips = resolve_host_with_mode(&client, &host, &mode)
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    std::io::Error::new(std::io::ErrorKind::Other, e).into()
+                })?;
+            let addrs: Vec<SocketAddr> = ips.into_iter().map(|ip| SocketAddr::new(ip, 0)).collect();
+            Ok(Box::new(addrs.into_iter()) as Addrs)
+        })
+    }
+}
+
+pub async fn resolve_host_with_mode(
+    client: &reqwest::Client,
+    host: &str,
+    mode: &str,
+) -> std::result::Result<Vec<IpAddr>, String> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(vec![ip]);
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return Ok(vec![IpAddr::from([127, 0, 0, 1])]);
+    }
+
+    match mode {
+        "off" => system_lookup(host).await,
+        "cloudflare" => doh_lookup(client, DohProvider::Cloudflare, host).await,
+        "google" => doh_lookup(client, DohProvider::Google, host).await,
+        _ => {
+            match tokio::time::timeout(Duration::from_secs(4), system_lookup(host)).await {
+                Ok(Ok(ips)) if has_public_ips(&ips) => Ok(ips),
+                _ => match doh_lookup(client, DohProvider::Cloudflare, host).await {
+                    Ok(ips) => Ok(ips),
+                    Err(_) => doh_lookup(client, DohProvider::Google, host).await,
+                },
+            }
+        }
+    }
+}
+
+async fn system_lookup(host: &str) -> std::result::Result<Vec<IpAddr>, String> {
+    let addrs = tokio::net::lookup_host((host, 443))
+        .await
+        .map_err(|e| format!("DNS sistem gagal: {e}"))?;
+    let mut ips = Vec::new();
+    for addr in addrs {
+        let ip = addr.ip();
+        if !ips.contains(&ip) {
+            ips.push(ip);
+        }
+    }
+    if ips.is_empty() {
+        Err("DNS sistem tidak mengembalikan IP".to_string())
+    } else {
+        Ok(ips)
+    }
+}
+
+fn has_public_ips(ips: &[IpAddr]) -> bool {
+    ips.iter().any(|ip| match ip {
+        IpAddr::V4(ip) => !ip.is_loopback() && !ip.is_unspecified(),
+        IpAddr::V6(ip) => !ip.is_loopback() && !ip.is_unspecified(),
+    })
+}
+
+enum DohProvider {
+    Cloudflare,
+    Google,
+}
+
+async fn doh_lookup(
+    client: &reqwest::Client,
+    provider: DohProvider,
+    host: &str,
+) -> std::result::Result<Vec<IpAddr>, String> {
+    let url = match provider {
+        DohProvider::Cloudflare => format!("https://1.1.1.1/dns-query?name={host}&type=A"),
+        DohProvider::Google => format!("https://8.8.8.8/resolve?name={host}&type=A"),
+    };
+    let text = client
+        .get(url)
+        .header("accept", "application/dns-json")
+        .send()
+        .await
+        .map_err(|e| format!("DNS-over-HTTPS gagal: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("DNS-over-HTTPS status gagal: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("DNS-over-HTTPS tidak dapat dibaca: {e}"))?;
+    let ips = parse_doh_json(&text);
+    if ips.is_empty() {
+        Err("DNS-over-HTTPS tidak mengembalikan IP".to_string())
+    } else {
+        Ok(ips)
+    }
+}
+
+pub async fn resolve_doh_auto(host: &str) -> std::result::Result<Vec<IpAddr>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(6))
+        .connect_timeout(Duration::from_secs(6))
+        .build()
+        .map_err(|e| e.to_string())?;
+    match doh_lookup(&client, DohProvider::Cloudflare, host).await {
+        Ok(ips) => Ok(ips),
+        Err(_) => doh_lookup(&client, DohProvider::Google, host).await,
+    }
+}
+
+pub fn parse_doh_json(json: &str) -> Vec<IpAddr> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(answers) = value.get("Answer").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    let mut ips = Vec::new();
+    for answer in answers {
+        if answer.get("type").and_then(|v| v.as_u64()) != Some(1) {
+            continue;
+        }
+        if let Some(data) = answer.get("data").and_then(|v| v.as_str()) {
+            if let Ok(ip) = data.parse::<IpAddr>() {
+                ips.push(ip);
+            }
+        }
+    }
+    ips
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_doh_json_cloudflare() {
+        let json = r#"{
+            "Status": 0,
+            "Answer": [
+                {"name":"api.shngm.io","type":1,"TTL":300,"data":"104.21.10.10"},
+                {"name":"api.shngm.io","type":28,"TTL":300,"data":"2606:4700::1"}
+            ]
+        }"#;
+        assert_eq!(parse_doh_json(json), vec![IpAddr::from([104, 21, 10, 10])]);
+    }
+
+    #[test]
+    fn parse_doh_json_google() {
+        let json = r#"{
+            "Status": 0,
+            "TC": false,
+            "RD": true,
+            "RA": true,
+            "Answer": [
+                {"name":"assets.shngm.id.","type":5,"TTL":120,"data":"cdn.example."},
+                {"name":"assets.shngm.id.","type":1,"TTL":120,"data":"172.67.20.20"}
+            ]
+        }"#;
+        assert_eq!(parse_doh_json(json), vec![IpAddr::from([172, 67, 20, 20])]);
     }
 }
 

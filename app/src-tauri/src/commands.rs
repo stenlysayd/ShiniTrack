@@ -1,8 +1,10 @@
 //! `#[tauri::command]`s called from the UI.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Duration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -34,10 +36,15 @@ pub struct AppCtx {
 impl AppCtx {
     pub fn new(dir: PathBuf) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&dir)?;
+        let store = Store::open(backend::db_path(&dir))?;
+        let api = ShinigamiClient::new()?;
+        if let Ok(Some(mode)) = store.kv_get("pref.net.doh") {
+            api.set_doh_mode(&mode);
+        }
         Ok(Self {
-            store: Mutex::new(Store::open(backend::db_path(&dir))?),
+            store: Mutex::new(store),
             dir,
-            api: ShinigamiClient::new()?,
+            api,
             chapter_cache: Mutex::new(HashMap::new()),
         })
     }
@@ -558,8 +565,131 @@ pub async fn pref_set(
         .map_err(err)?;
     if key == "dl.wifi_only" {
         worker.wake();
+    } else if key == "net.doh" {
+        ctx.api.set_doh_mode(&value);
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkDiagnoseReport {
+    pub checks: Vec<NetworkCheck>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkCheck {
+    pub host: String,
+    pub system_dns_ms: Option<u128>,
+    pub system_dns_ips: Vec<String>,
+    pub doh_ms: Option<u128>,
+    pub doh_ips: Vec<String>,
+    pub tcp443_ms: Option<u128>,
+    pub https_status: Option<u16>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn diagnose_network(ctx: State<'_, AppCtx>) -> CmdResult<NetworkDiagnoseReport> {
+    let mut hosts = Vec::new();
+    if let Some(host) = ctx.api.base_host() {
+        hosts.push(host);
+    }
+    hosts.extend(crate::reader::ALLOWED_HOST_SUFFIXES.iter().map(|h| h.to_string()));
+    hosts.push("www.gstatic.com".to_string());
+    hosts.sort();
+    hosts.dedup();
+
+    let mut checks = Vec::new();
+    for host in hosts {
+        checks.push(check_network_host(&host).await);
+    }
+    Ok(NetworkDiagnoseReport { checks })
+}
+
+async fn check_network_host(host: &str) -> NetworkCheck {
+    let mut errors = Vec::new();
+
+    let dns_start = Instant::now();
+    let system_dns = tokio::time::timeout(StdDuration::from_secs(6), tokio::net::lookup_host((host, 443))).await;
+    let mut system_dns_ms = None;
+    let mut system_dns_ips = Vec::new();
+    match system_dns {
+        Ok(Ok(addrs)) => {
+            system_dns_ms = Some(dns_start.elapsed().as_millis());
+            system_dns_ips = unique_ip_strings(addrs.map(|addr| addr.ip()));
+        }
+        Ok(Err(e)) => errors.push(format!("DNS sistem: {e}")),
+        Err(_) => errors.push("DNS sistem: timeout".to_string()),
+    }
+
+    let doh_start = Instant::now();
+    let doh = tokio::time::timeout(StdDuration::from_secs(6), shinitrack_core::api::resolve_doh_auto(host)).await;
+    let mut doh_ms = None;
+    let mut doh_ips = Vec::new();
+    match doh {
+        Ok(Ok(ips)) => {
+            doh_ms = Some(doh_start.elapsed().as_millis());
+            doh_ips = unique_ip_strings(ips.into_iter());
+        }
+        Ok(Err(e)) => errors.push(format!("DNS-over-HTTPS: {e}")),
+        Err(_) => errors.push("DNS-over-HTTPS: timeout".to_string()),
+    }
+
+    let tcp_start = Instant::now();
+    let tcp = tokio::time::timeout(StdDuration::from_secs(6), tokio::net::TcpStream::connect((host, 443))).await;
+    let mut tcp443_ms = None;
+    match tcp {
+        Ok(Ok(_)) => {
+            tcp443_ms = Some(tcp_start.elapsed().as_millis());
+        }
+        Ok(Err(e)) => errors.push(format!("TCP 443: {e}")),
+        Err(_) => errors.push("TCP 443: timeout".to_string()),
+    }
+
+    let https_start = Instant::now();
+    let url = if host == "www.gstatic.com" {
+        "https://www.gstatic.com/generate_204".to_string()
+    } else {
+        format!("https://{host}/")
+    };
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_secs(6))
+        .connect_timeout(StdDuration::from_secs(6))
+        .build();
+    let mut https_status = None;
+    match client {
+        Ok(client) => match tokio::time::timeout(StdDuration::from_secs(6), client.get(url).send()).await {
+            Ok(Ok(resp)) => {
+                let _https_ms = https_start.elapsed().as_millis();
+                https_status = Some(resp.status().as_u16());
+            }
+            Ok(Err(e)) => errors.push(format!("HTTPS: {e}")),
+            Err(_) => errors.push("HTTPS: timeout".to_string()),
+        },
+        Err(e) => errors.push(format!("HTTPS client: {e}")),
+    }
+
+    NetworkCheck {
+        host: host.to_string(),
+        system_dns_ms,
+        system_dns_ips,
+        doh_ms,
+        doh_ips,
+        tcp443_ms,
+        https_status,
+        error: if errors.is_empty() { None } else { Some(errors.join("; ")) },
+    }
+}
+
+fn unique_ip_strings(ips: impl Iterator<Item = IpAddr>) -> Vec<String> {
+    let mut out = Vec::new();
+    for ip in ips {
+        let s = ip.to_string();
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
 }
 
 #[tauri::command]
