@@ -77,6 +77,8 @@ export async function renderFavorites(opts = {}) {
     }
 
     // Infinite scroll state
+    let loadSeq = 0;
+    const renderedIds = new Set();
     let currentOffset = 0;
     let loading = false;
     let allLoaded = false;
@@ -85,6 +87,7 @@ export async function renderFavorites(opts = {}) {
     async function loadPage(isCatChange = false) {
       if (loading || allLoaded) return;
       loading = true;
+      const my = loadSeq;
       try {
         const isDownloadedOnly = getPref('app.downloaded_only', getPref('downloaded_only', '0')) === '1';
         const rows = await api.library_list({
@@ -99,11 +102,12 @@ export async function renderFavorites(opts = {}) {
           limit: PAGE_SIZE,
           offset: currentOffset,
         });
+        if (my !== loadSeq) return;
         if (rows.length < PAGE_SIZE) allLoaded = true;
         if (rows.length === 0 && currentOffset === 0) {
           gridWrap.innerHTML = `<div class="empty">${Icons.emptySearch()}<h3>Tidak Ada Hasil</h3><p>Tidak ada komik yang cocok.</p></div>`;
         } else {
-          appendCards(rows, gridWrap);
+          appendCards(rows, gridWrap, renderedIds);
           if (currentOffset === 0 && (isCatChange || (!opts.isSearch && !opts.isFilter && !opts.isSelectMode && !state.librarySearchQuery.trim()))) {
             const cards = gridWrap.querySelectorAll('.grid-card, .card');
             motion.stagger(cards, { max: 24 });
@@ -111,9 +115,13 @@ export async function renderFavorites(opts = {}) {
         }
         currentOffset += rows.length;
       } catch (e) {
+        if (my !== loadSeq) return;
         if (currentOffset === 0) gridWrap.innerHTML = `<div class="empty"><p style="color:var(--text-muted)">Gagal memuat: ${e}</p></div>`;
+      } finally {
+        if (my === loadSeq) {
+          loading = false;
+        }
       }
-      loading = false;
     }
 
     // IntersectionObserver for infinite scroll
@@ -126,6 +134,8 @@ export async function renderFavorites(opts = {}) {
 
     function resetAndLoad() {
       if (sentinel) observer.unobserve(sentinel);
+      loadSeq++;
+      renderedIds.clear();
       currentOffset = 0;
       allLoaded = false;
       loading = false;
@@ -143,13 +153,13 @@ export async function renderFavorites(opts = {}) {
   }
 }
 
-function appendCards(rows, container) {
+function appendCards(rows, container, renderedIds) {
   // Deduplicate against already rendered items to prevent clone cards
-  const existingIds = new Set();
-  container.querySelectorAll('[data-id]').forEach(el => {
-    if (el.dataset.id) existingIds.add(el.dataset.id);
+  const filteredRows = rows.filter(r => {
+    if (renderedIds && renderedIds.has(r.manga_id)) return false;
+    if (renderedIds) renderedIds.add(r.manga_id);
+    return true;
   });
-  const filteredRows = rows.filter(r => !existingIds.has(r.manga_id));
   if (!filteredRows.length) return;
 
   // Convert LibraryRow to a shape renderCards expects

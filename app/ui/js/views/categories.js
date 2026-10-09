@@ -25,7 +25,7 @@ function showInputDialog({ title, placeholder, value = '', onSubmit }) {
   input.className = 'cat-dialog-input';
   input.placeholder = placeholder;
   input.value = value;
-  input.maxLength = 60;
+  input.maxLength = 40;
   dialog.appendChild(input);
 
   const actions = document.createElement('div');
@@ -40,8 +40,7 @@ function showInputDialog({ title, placeholder, value = '', onSubmit }) {
   okBtn.textContent = 'Simpan';
   okBtn.className = 'cat-dialog-btn cat-dialog-btn--primary';
   okBtn.addEventListener('click', () => {
-    const v = input.value.trim();
-    if (!v) return;
+    const v = input.value;
     document.body.removeChild(overlay);
     onSubmit(v);
   });
@@ -171,22 +170,13 @@ export async function renderCategories() {
     showInputDialog({
       title: 'Tambah kategori',
       placeholder: 'Nama kategori',
-      onSubmit: async (name) => {
-        const trimmed = (name || '').trim();
-        const lower = trimmed.toLowerCase();
-        if (!trimmed) {
-          showToast('Nama kategori tidak boleh kosong');
-          return;
-        }
-        if (lower === 'semua' || lower === 'bawaan') {
-          showToast("Nama 'Semua' dan 'Bawaan' adalah kategori sistem!");
-          return;
-        }
         try {
-          await api.category_create({ name: trimmed });
+          await api.category_create({ name });
           showToast('Kategori ditambahkan');
           await loadList();
-        } catch (e) { showToast('Gagal: ' + e); }
+        } catch (e) {
+          showToast(e.message || String(e));
+        }
       }
     });
   });
@@ -252,21 +242,13 @@ export async function renderCategories() {
           placeholder: 'Nama baru',
           value: c.name,
           onSubmit: async (name) => {
-            const trimmed = (name || '').trim();
-            const lower = trimmed.toLowerCase();
-            if (!trimmed) {
-              showToast('Nama kategori tidak boleh kosong');
-              return;
-            }
-            if (lower === 'semua' || lower === 'bawaan') {
-              showToast("Nama 'Semua' dan 'Bawaan' adalah kategori sistem!");
-              return;
-            }
             try {
-              await api.category_rename({ id: c.id, name: trimmed });
+              await api.category_rename({ id: c.id, name });
               showToast('Kategori diubah');
               await loadList();
-            } catch (e) { showToast('Gagal: ' + e); }
+            } catch (e) {
+              showToast(e.message || String(e));
+            }
           }
         });
       });

@@ -43,14 +43,18 @@ export async function renderMangaDetail(mangaId) {
     </div>`;
 
   try {
-    const detail = await api.manga_detail({ mangaId });
-    const chRes = await api.chapters({ mangaId });
+    const [detail, chRes, categories] = await Promise.all([
+      api.manga_detail({ mangaId }),
+      api.chapters({ mangaId }),
+      api.category_list().catch(() => []),
+    ]);
     const readIds = await api.list_read_chapters({ mangaId }).catch(() => new Set());
     const bookmarkedIds = await api.list_bookmarked_chapters({ mangaId }).catch(() => new Set());
     const progress = await api.get_reading_progress({ mangaId }).catch(() => null);
     
     const m = detail.manga;
     const isFav = !!detail.favorite;
+    const hasCustomCats = categories && categories.length > 0;
     const downloadedSet = new Set(chRes.downloaded || []);
     const readSet = new Set(readIds || []);
     const bookmarkedSet = new Set(bookmarkedIds || []);
@@ -105,8 +109,8 @@ export async function renderMangaDetail(mangaId) {
                 <span class="detail-action-icon">${isFav ? Icons.star('', true) : Icons.plus()}</span>
                 <span class="detail-action-text">${isFav ? 'Di pustaka' : 'Tambah'}</span>
               </button>
-              ${isFav ? `
-              <button id="det-cat-btn" class="detail-action-btn" title="Atur Kategori">
+              ${isFav && hasCustomCats ? `
+              <button id="det-cat-btn" class="detail-action-btn det-cat-btn" title="Atur Kategori">
                 <span class="detail-action-icon">${Icons.tag()}</span>
                 <span class="detail-action-text">Kategori</span>
               </button>
@@ -252,7 +256,7 @@ export async function renderMangaDetail(mangaId) {
 
     viewEl.innerHTML = html;
 
-    attachDetailEvents(mangaId, detail, chapters, progress, chRes, readSet, downloadedSet);
+    attachDetailEvents(mangaId, detail, chapters, progress, chRes, readSet, downloadedSet, categories);
 
   } catch (err) {
     viewEl.innerHTML = `

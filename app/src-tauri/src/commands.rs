@@ -1013,7 +1013,10 @@ pub fn category_create(ctx: State<'_, AppCtx>, name: String) -> CmdResult<Catego
         .lock()
         .unwrap()
         .create_category(&name)
-        .map_err(err)
+        .map_err(|e| match e {
+            shinitrack_core::Error::Api { message, .. } => message,
+            other => err(other),
+        })
 }
 
 #[tauri::command]
@@ -1022,7 +1025,10 @@ pub fn category_rename(ctx: State<'_, AppCtx>, id: i64, name: String) -> CmdResu
         .lock()
         .unwrap()
         .rename_category(id, &name)
-        .map_err(err)
+        .map_err(|e| match e {
+            shinitrack_core::Error::Api { message, .. } => message,
+            other => err(other),
+        })
 }
 
 #[tauri::command]

@@ -749,6 +749,12 @@ button {
   color: var(--accent);
 }
 
+.det-cat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .detail-action-icon {
   display: inline-flex;
   flex-shrink: 0;

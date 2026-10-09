@@ -12,7 +12,7 @@ function shinigamiSiteUrl(mangaId) {
   return `https://shinigami.id/series/${encodeURIComponent(mangaId)}`;
 }
 
-export function attachDetailEvents(mangaId, detail, chapters, progress, chRes = { items: [] }, readSet = new Set(), downloadedSet = new Set()) {
+export function attachDetailEvents(mangaId, detail, chapters, progress, chRes = { items: [] }, readSet = new Set(), downloadedSet = new Set(), categories = []) {
     const descBox = document.getElementById('desc-box');
     if (descBox) descBox.addEventListener('click', () => descBox.classList.toggle('open'));
 
@@ -62,7 +62,7 @@ export function attachDetailEvents(mangaId, detail, chapters, progress, chRes = 
     // Favorite toggle
     const favBtn = document.getElementById('det-fav-btn');
     if (favBtn) {
-      favBtn.addEventListener('click', async () => {
+      favBtn.onclick = async () => {
         try {
           if (detail.favorite) {
             await api.remove_favorite({ mangaId });
@@ -71,11 +71,10 @@ export function attachDetailEvents(mangaId, detail, chapters, progress, chRes = 
           } else {
             await api.add_favorite({ mangaId });
             showToast('Ditambahkan ke pustaka');
-            const cats = await api.category_list().catch(() => []);
+            const cats = (categories && categories.length) ? categories : await api.category_list().catch(() => []);
             if (cats.length) {
               const mangaCats = await api.get_manga_categories({ mangaId }).catch(() => []);
               showCategoryAssignDialog([mangaId], cats, { [mangaId]: mangaCats }, () => {
-                showToast('Kategori disimpan');
                 renderMangaDetail(mangaId);
               });
             } else {
@@ -85,28 +84,27 @@ export function attachDetailEvents(mangaId, detail, chapters, progress, chRes = 
         } catch (e) {
           showToast(`Error: ${e}`);
         }
-      });
+      };
     }
 
     // Category assign button (when favorited)
     const catBtn = document.getElementById('det-cat-btn');
     if (catBtn) {
-      catBtn.addEventListener('click', async () => {
+      catBtn.onclick = async () => {
         try {
-          const cats = await api.category_list().catch(() => []);
+          const cats = (categories && categories.length) ? categories : await api.category_list().catch(() => []);
           if (!cats.length) {
             showToast('Belum ada kategori kustom. Buat di menu Lainnya > Kategori');
             return;
           }
           const mangaCats = await api.get_manga_categories({ mangaId }).catch(() => []);
           showCategoryAssignDialog([mangaId], cats, { [mangaId]: mangaCats }, () => {
-            showToast('Kategori disimpan');
             renderMangaDetail(mangaId);
           });
         } catch (e) {
           showToast(`Error: ${e}`);
         }
-      });
+      };
     }
 
     const openSiteBtn = document.getElementById('det-open-site-btn');

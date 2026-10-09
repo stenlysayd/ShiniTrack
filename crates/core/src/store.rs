@@ -895,21 +895,32 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    pub fn normalize_category_name(&self, raw: &str, exclude_id: Option<i64>) -> Result<String> {
+        let normalized = normalize_category_name(raw)?;
+        let count: i64 = if let Some(ex_id) = exclude_id {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM category WHERE LOWER(name) = LOWER(?1) AND id != ?2",
+                params![normalized, ex_id],
+                |r| r.get(0),
+            )?
+        } else {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM category WHERE LOWER(name) = LOWER(?1)",
+                params![normalized],
+                |r| r.get(0),
+            )?
+        };
+        if count > 0 {
+            return Err(Error::Api {
+                code: 400,
+                message: "Nama kategori sudah digunakan".into(),
+            });
+        }
+        Ok(normalized)
+    }
+
     pub fn create_category(&self, name: &str) -> Result<Category> {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama kategori tidak boleh kosong".into(),
-            });
-        }
-        let lower = trimmed.to_lowercase();
-        if lower == "semua" || lower == "bawaan" {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama 'Semua' dan 'Bawaan' adalah kategori sistem dan tidak dapat digunakan".into(),
-            });
-        }
+        let normalized = self.normalize_category_name(name, None)?;
         let next_order: i64 = self
             .conn
             .query_row(
@@ -919,35 +930,22 @@ impl Store {
             )?;
         self.conn.execute(
             "INSERT INTO category (name, sort_order) VALUES (?1, ?2)",
-            params![trimmed, next_order],
+            params![normalized, next_order],
         )?;
         let id = self.conn.last_insert_rowid();
         Ok(Category {
             id,
-            name: trimmed.to_string(),
+            name: normalized,
             sort_order: next_order,
             flags: 0,
         })
     }
 
     pub fn rename_category(&self, id: i64, new_name: &str) -> Result<()> {
-        let trimmed = new_name.trim();
-        if trimmed.is_empty() {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama kategori tidak boleh kosong".into(),
-            });
-        }
-        let lower = trimmed.to_lowercase();
-        if lower == "semua" || lower == "bawaan" {
-            return Err(Error::Api {
-                code: 400,
-                message: "Nama 'Semua' dan 'Bawaan' adalah kategori sistem dan tidak dapat digunakan".into(),
-            });
-        }
+        let normalized = self.normalize_category_name(new_name, Some(id))?;
         self.conn.execute(
             "UPDATE category SET name = ?2 WHERE id = ?1",
-            params![id, trimmed],
+            params![id, normalized],
         )?;
         Ok(())
     }
@@ -1432,6 +1430,43 @@ pub struct Statistics {
     pub total_chapters: u64,
     pub total_read_chapters: u64,
     pub total_downloads: u64,
+}
+
+pub fn normalize_category_name(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Api {
+            code: 400,
+            message: "Nama kategori tidak boleh kosong".into(),
+        });
+    }
+    let mut normalized = String::new();
+    let mut last_was_space = false;
+    for c in trimmed.chars() {
+        if c.is_whitespace() {
+            if !last_was_space {
+                normalized.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            normalized.push(c);
+            last_was_space = false;
+        }
+    }
+    if normalized.chars().count() > 40 {
+        return Err(Error::Api {
+            code: 400,
+            message: "Nama kategori tidak boleh lebih dari 40 karakter".into(),
+        });
+    }
+    let lower = normalized.to_lowercase();
+    if lower == "semua" || lower == "bawaan" || lower == "default" {
+        return Err(Error::Api {
+            code: 400,
+            message: "Nama 'Semua', 'Bawaan', dan 'Default' adalah nama sistem dan tidak dapat digunakan".into(),
+        });
+    }
+    Ok(normalized)
 }
 
 #[cfg(test)]
@@ -2135,6 +2170,51 @@ mod tests {
         // mark_chapter_read inserts row
         s.mark_chapter_read("m-incog", "ch-1", 1.0, true).unwrap();
         assert!(s.list_read_chapter_ids("m-incog").unwrap().contains("ch-1"));
+    }
+
+    #[test]
+    fn test_category_validation_all_cases() {
+        let s = Store::open_in_memory().unwrap();
+
+        // 1. Trim & collapse double spaces
+        assert_eq!(normalize_category_name("  Action    Romance  ").unwrap(), "Action Romance");
+        let c1 = s.create_category("  Action    Romance  ").unwrap();
+        assert_eq!(c1.name, "Action Romance");
+
+        // 2. Reject empty or pure whitespace
+        assert!(normalize_category_name("").is_err());
+        assert!(normalize_category_name("    ").is_err());
+        assert!(s.create_category("").is_err());
+        assert!(s.create_category("   ").is_err());
+
+        // 3. Reject length > 40
+        let len40 = "a".repeat(40);
+        let len41 = "a".repeat(41);
+        assert!(normalize_category_name(&len40).is_ok());
+        assert!(normalize_category_name(&len41).is_err());
+        assert!(s.create_category(&len41).is_err());
+
+        // 4. Reject case-insensitive "semua", "bawaan", "default"
+        for forbidden in &["semua", "Semua", "SEMUA", "bawaan", "Bawaan", "BAWAAN", "default", "Default", "DEFAULT"] {
+            assert!(normalize_category_name(forbidden).is_err());
+            assert!(s.create_category(forbidden).is_err());
+            assert!(s.rename_category(c1.id, forbidden).is_err());
+        }
+
+        // 5. Reject duplicate names (case-insensitive) on create and rename
+        let c2 = s.create_category("Fantasy").unwrap();
+        // Duplicate create
+        assert!(s.create_category("Fantasy").is_err());
+        assert!(s.create_category("fantasy").is_err());
+        assert!(s.create_category("  FANTASY  ").is_err());
+        // Duplicate rename
+        assert!(s.rename_category(c2.id, "Action Romance").is_err());
+        assert!(s.rename_category(c2.id, "action romance").is_err());
+        assert!(s.rename_category(c2.id, "  ACTION   ROMANCE  ").is_err());
+
+        // Renaming to itself is allowed
+        assert!(s.rename_category(c2.id, "Fantasy").is_ok());
+        assert!(s.rename_category(c2.id, "Fantasy New").is_ok());
     }
 }
 
