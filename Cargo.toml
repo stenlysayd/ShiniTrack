@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/server", "app/src-tauri"]
 
 [workspace.package]
-version = "1.0.1"
+version = "1.0.3"
 edition = "2021"
 license = "MIT"
 

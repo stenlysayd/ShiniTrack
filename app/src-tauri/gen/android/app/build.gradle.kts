@@ -22,8 +22,8 @@ android {
         applicationId = "id.shinitrack.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1000001").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0.1")
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1000003").toInt()
+        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0.3")
     }
     signingConfigs {
         create("release") {
