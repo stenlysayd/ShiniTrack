@@ -265,6 +265,15 @@ pub fn downloads_root() -> anyhow::Result<String> {
     Ok(get_string(&mut env, &j_str).unwrap_or_default())
 }
 
+pub fn prepare_downloads_root() -> anyhow::Result<bool> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = bridge_class(&mut env)?;
+    let val_res = env.call_static_method(&class, "prepareDownloadsRoot", "()Z", &[]);
+    let val = java_call(&mut env, val_res, "call prepareDownloadsRoot")?;
+    val.z().map_err(|e| e.into())
+}
+
 pub fn is_wifi_connected() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;

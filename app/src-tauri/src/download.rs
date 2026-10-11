@@ -54,6 +54,16 @@ pub fn downloads_root<R: Runtime>(_app: &AppHandle<R>, fallback_dir: &std::path:
     fallback_dir.join("downloads")
 }
 
+fn prepare_downloads_root_for_write() -> anyhow::Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        if !crate::jni_bridge::prepare_downloads_root().unwrap_or(false) {
+            bail!("Izin penyimpanan diperlukan. Izinkan akses semua file untuk ShiniTrack, lalu coba unduh lagi.");
+        }
+    }
+    Ok(())
+}
+
 pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) -> anyhow::Result<Download> {
     let ctx = app.state::<AppCtx>();
     let detail = ctx
@@ -76,6 +86,7 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
     let clean_title = sanitize_folder_name(&manga_title);
     let ch_folder = format!("Chapter {}", detail.chapter_number);
     let dir: PathBuf = downloads_root(app, &ctx.dir).join(&clean_title).join(&ch_folder);
+    prepare_downloads_root_for_write()?;
     tokio::fs::create_dir_all(&dir).await?;
 
     let urls = detail.image_urls(low);

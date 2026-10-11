@@ -218,6 +218,47 @@ object ShiniBridge {
         return File(publicRoot, DOWNLOAD_ROOT_NAME)
     }
 
+    private fun hasSharedStorageAccess(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+    }
+
+    private fun requestSharedStorageAccess(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return
+        }
+        val ctx = context.applicationContext
+        try {
+            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                data = Uri.parse("package:${ctx.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to launch app all-files settings, opening generic page", e)
+            val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+        }
+        toast(ctx, "Izinkan akses semua file agar unduhan tersimpan di folder ShiniTrack.")
+    }
+
+    @JvmStatic
+    fun prepareDownloadsRoot(): Boolean {
+        return try {
+            val ctx = appContext ?: currentActivity?.applicationContext ?: return false
+            if (!hasSharedStorageAccess()) {
+                requestSharedStorageAccess(ctx)
+                return false
+            }
+            val dir = downloadsRootFile()
+            dir.exists() || dir.mkdirs()
+        } catch (e: Throwable) {
+            Log.e(TAG, "prepareDownloadsRoot failed", e)
+            false
+        }
+    }
+
     @JvmStatic
     fun downloadsRoot(): String {
         return try {
@@ -344,6 +385,10 @@ object ShiniBridge {
             val treeUriString = safPrefs(ctx).getString(SAF_EXPORT_KEY, "") ?: ""
             if (treeUriString.isBlank()) {
                 toast(ctx, "Pilih folder ekspor unduhan dulu.")
+                return false
+            }
+            if (!hasSharedStorageAccess()) {
+                requestSharedStorageAccess(ctx)
                 return false
             }
             thread(name = "ShiniTrackDownloadsExport") {
