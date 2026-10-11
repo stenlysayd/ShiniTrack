@@ -232,9 +232,11 @@ function setupUpdateModal() {
         cancelBtn.disabled = false;
       } else if (res.success) {
         showToast(res.message, 5000);
-        dlText.textContent = 'Penginstal paket Android telah dibuka.';
+        dlBar.style.width = '100%';
+        dlPct.textContent = '100%';
+        dlText.textContent = 'APK selesai diunduh. Ketuk Pasang Pembaruan untuk membuka installer.';
         installBtn.disabled = false;
-        installBtn.textContent = 'Pasang Ulang';
+        installBtn.textContent = 'Pasang Pembaruan';
         cancelBtn.disabled = false;
       } else {
         showToast(res.message, 5000);
@@ -269,7 +271,7 @@ function setupUpdateModal() {
 
 export function showUpdateModal(info) {
   state.updateModalData = info;
-  state.downloadedApkPath = null;
+  state.downloadedApkPath = info.downloaded_apk_path || null;
   const modal = document.getElementById('update-modal');
   document.getElementById('modal-update-title').textContent = `${info.release_name || 'ShiniTrack ' + info.latest_version}`;
   document.getElementById('modal-update-date').textContent = info.published_at
@@ -291,7 +293,9 @@ export function showUpdateModal(info) {
   dlBox.classList.add('hidden');
   const installBtn = document.getElementById('modal-install-btn');
   installBtn.disabled = false;
-  installBtn.textContent = info.download_url ? 'Unduh & Pasang' : 'Buka GitHub';
+  installBtn.textContent = state.downloadedApkPath
+    ? 'Pasang Pembaruan'
+    : (info.download_url ? 'Unduh APK' : 'Buka GitHub');
   document.getElementById('modal-cancel-btn').disabled = false;
 
   modal.classList.remove('hidden');

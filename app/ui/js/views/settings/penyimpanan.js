@@ -123,9 +123,8 @@ async function refreshStorageInfo() {
     // Update location text
     const infoEls = activeContainer.querySelectorAll('.settings-info-text');
     if (infoEls[0]) {
-      const sep = String(info.data_dir || '').endsWith('/') ? '' : '/';
-      const downloadsPath = `${info.data_dir || ''}${sep}downloads`;
-      infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${escapeHtml(info.data_dir)}<br/><b>Unduhan internal:</b> ${escapeHtml(downloadsPath)} (${formatBytes(info.downloads_bytes)})<br/><span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">Unduhan disimpan di dalam aplikasi; gunakan 'Salin unduhan ke folder ini' untuk mengambil berkasnya.<br/>&bull; Folder Cadangan: backups/</span>`;
+      const downloadsPath = info.downloads_dir || '';
+      infoEls[0].innerHTML = `<b>Data Aplikasi:</b> ${escapeHtml(info.data_dir)}<br/><b>Unduhan komik:</b> ${escapeHtml(downloadsPath)} (${formatBytes(info.downloads_bytes)})<br/><span style="color:var(--text-faint); font-size:11.5px; display:inline-block; margin-top:4px;">Android menyimpan unduhan baru di folder ShiniTrack pada penyimpanan internal.<br/>&bull; Folder Cadangan: backups/</span>`;
     }
 
     // Update last backup text
@@ -273,7 +272,7 @@ export const penyimpananSchema = [
   {
     type: 'button',
     title: 'Salin unduhan ke folder ini',
-    subtitle: 'Salin isi downloads/<Judul>/Chapter N ke folder ekspor unduhan',
+    subtitle: 'Salin isi ShiniTrack/<Judul>/Chapter N ke folder ekspor unduhan',
     icon: window.Icons && window.Icons.download ? window.Icons.download() : '',
     onClick: async () => {
       try {

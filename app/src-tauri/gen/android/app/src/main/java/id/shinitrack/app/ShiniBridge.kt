@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -42,6 +43,7 @@ object ShiniBridge {
     private const val SAF_PREFS = "shini_saf"
     private const val SAF_BACKUP_KEY = "auto_backup_tree_uri"
     private const val SAF_EXPORT_KEY = "export_tree_uri"
+    private const val DOWNLOAD_ROOT_NAME = "ShiniTrack"
 
     private data class SafRequest(
         val action: String,
@@ -211,6 +213,28 @@ object ShiniBridge {
         return activity
     }
 
+    private fun downloadsRootFile(): File {
+        val publicRoot = Environment.getExternalStorageDirectory()
+        return File(publicRoot, DOWNLOAD_ROOT_NAME)
+    }
+
+    @JvmStatic
+    fun downloadsRoot(): String {
+        return try {
+            if (appContext == null && currentActivity?.applicationContext == null) {
+                return ""
+            }
+            val dir = downloadsRootFile()
+            if (!dir.exists() && !dir.mkdirs()) {
+                Log.w(TAG, "Failed to create downloads root: ${dir.absolutePath}")
+            }
+            dir.absolutePath
+        } catch (e: Throwable) {
+            Log.e(TAG, "downloadsRoot failed", e)
+            ""
+        }
+    }
+
     @JvmStatic
     fun openDocumentTree(kind: String): Boolean {
         return try {
@@ -324,7 +348,7 @@ object ShiniBridge {
             }
             thread(name = "ShiniTrackDownloadsExport") {
                 try {
-                    val downloadsDir = File(ctx.filesDir, "downloads")
+                    val downloadsDir = downloadsRootFile()
                     val tree = DocumentFile.fromTreeUri(ctx, Uri.parse(treeUriString))
                     if (tree == null || !tree.isDirectory) {
                         toast(ctx, "Folder ekspor unduhan tidak dapat dibuka.")

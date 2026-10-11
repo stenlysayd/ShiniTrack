@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use jni::objects::{JByteArray, JClass, JObject, JString};
+use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
 use jni::sys::{jboolean, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
@@ -46,6 +46,7 @@ fn notices_json(r: anyhow::Result<Vec<backend::Notice>>) -> String {
 }
 
 static JAVA_VM: std::sync::OnceLock<jni::JavaVM> = std::sync::OnceLock::new();
+static SHINI_BRIDGE_CLASS: std::sync::OnceLock<GlobalRef> = std::sync::OnceLock::new();
 
 fn java_call<T>(
     env: &mut JNIEnv,
@@ -73,18 +74,47 @@ fn java_call<T>(
     }
 }
 
+fn cache_bridge_class(env: &mut JNIEnv, class: &JClass) {
+    if SHINI_BRIDGE_CLASS.get().is_some() {
+        return;
+    }
+    let global_res = env.new_global_ref(class);
+    match java_call(env, global_res, "cache ShiniBridge") {
+        Ok(global) => {
+            let _ = SHINI_BRIDGE_CLASS.set(global);
+        }
+        Err(e) => {
+            log::warn!("failed to cache ShiniBridge class: {e:#}");
+        }
+    }
+}
+
+fn bridge_class<'local>(env: &mut JNIEnv<'local>) -> anyhow::Result<JClass<'local>> {
+    if let Some(global) = SHINI_BRIDGE_CLASS.get() {
+        let local_res = env.new_local_ref(global.as_obj());
+        let local = java_call(env, local_res, "load cached ShiniBridge")?;
+        return Ok(JClass::from(local));
+    }
+
+    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
+    let class = java_call(env, class_res, "find ShiniBridge")?;
+    cache_bridge_class(env, &class);
+    Ok(class)
+}
+
 /// Called from `MainActivity.onCreate` before Tauri starts, and from every
 /// background entry point, so all code paths share one data directory.
 #[no_mangle]
 pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeInit(
     mut env: JNIEnv,
-    _class: JClass,
+    class: JClass,
     data_dir: JString,
 ) {
     init_logging();
     if let Ok(vm) = env.get_java_vm() {
         let _ = JAVA_VM.set(vm);
     }
+    cache_bridge_class(&mut env, &class);
     if let Some(d) = get_string(&mut env, &data_dir) {
         backend::set_data_dir_override(PathBuf::from(d));
     }
@@ -93,8 +123,7 @@ pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeInit(
 pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<crate::updater::InstallOutcome> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let j_path_res = env.new_string(apk_path);
     let j_path = java_call(&mut env, j_path_res, "create APK path string")?;
     let val_res = env.call_static_method(
@@ -134,8 +163,7 @@ pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<crate::updater::Ins
 pub fn can_install_packages() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let val_res = env.call_static_method(&class, "canInstallPackages", "()Z", &[]);
     let val = java_call(&mut env, val_res, "call canInstallPackages")?;
     val.z().map_err(|e| e.into())
@@ -144,8 +172,7 @@ pub fn can_install_packages() -> anyhow::Result<bool> {
 pub fn request_install_permission() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let val_res = env.call_static_method(&class, "requestInstallPermission", "()Z", &[]);
     let val = java_call(&mut env, val_res, "call requestInstallPermission")?;
     val.z().map_err(|e| e.into())
@@ -154,8 +181,7 @@ pub fn request_install_permission() -> anyhow::Result<bool> {
 pub fn saf_open_tree(kind: &str) -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let j_kind_res = env.new_string(kind);
     let j_kind = java_call(&mut env, j_kind_res, "create SAF kind string")?;
     let val_res = env.call_static_method(
@@ -171,8 +197,7 @@ pub fn saf_open_tree(kind: &str) -> anyhow::Result<bool> {
 pub fn saf_create_document(source_path: &str, default_name: &str) -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let j_source_res = env.new_string(source_path);
     let j_source = java_call(&mut env, j_source_res, "create SAF source string")?;
     let j_name_res = env.new_string(default_name);
@@ -190,8 +215,7 @@ pub fn saf_create_document(source_path: &str, default_name: &str) -> anyhow::Res
 pub fn saf_share_document(source_path: &str) -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let j_source_res = env.new_string(source_path);
     let j_source = java_call(&mut env, j_source_res, "create SAF source string")?;
     let val_res = env.call_static_method(
@@ -207,8 +231,7 @@ pub fn saf_share_document(source_path: &str) -> anyhow::Result<bool> {
 pub fn saf_export_downloads() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let val_res = env.call_static_method(&class, "copyDownloadsToTree", "()Z", &[]);
     let val = java_call(&mut env, val_res, "call copyDownloadsToTree")?;
     val.z().map_err(|e| e.into())
@@ -217,8 +240,7 @@ pub fn saf_export_downloads() -> anyhow::Result<bool> {
 pub fn saf_state() -> anyhow::Result<String> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class_res = env.find_class("id/shinitrack/app/ShiniBridge");
-    let class = java_call(&mut env, class_res, "find ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let val_res = env.call_static_method(&class, "getSafState", "()Ljava/lang/String;", &[]);
     let val = java_call(&mut env, val_res, "call getSafState")?;
     let j_obj = val.l().map_err(|e| anyhow::anyhow!("read getSafState result: {e}"))?;
@@ -227,6 +249,20 @@ pub fn saf_state() -> anyhow::Result<String> {
     }
     let j_str: JString = j_obj.into();
     Ok(get_string(&mut env, &j_str).unwrap_or_else(|| "{}".into()))
+}
+
+pub fn downloads_root() -> anyhow::Result<String> {
+    let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
+    let mut env = vm.attach_current_thread()?;
+    let class = bridge_class(&mut env)?;
+    let val_res = env.call_static_method(&class, "downloadsRoot", "()Ljava/lang/String;", &[]);
+    let val = java_call(&mut env, val_res, "call downloadsRoot")?;
+    let j_obj = val.l().map_err(|e| anyhow::anyhow!("read downloadsRoot result: {e}"))?;
+    if j_obj.is_null() {
+        return Ok(String::new());
+    }
+    let j_str: JString = j_obj.into();
+    Ok(get_string(&mut env, &j_str).unwrap_or_default())
 }
 
 pub fn is_wifi_connected() -> anyhow::Result<bool> {
@@ -254,7 +290,7 @@ pub fn is_wifi_connected() -> anyhow::Result<bool> {
         Ok(ctx) => ctx,
         Err(_) => {
             let _ = env.exception_clear();
-            let bridge_class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+            let bridge_class = bridge_class(&mut env)?;
             let instance = env
                 .get_static_field(
                     &bridge_class,
@@ -346,15 +382,17 @@ pub fn is_wifi_connected() -> anyhow::Result<bool> {
 pub fn show_native_notification(notice: &backend::Notice) -> anyhow::Result<()> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
-    let class = env.find_class("id/shinitrack/app/ShiniBridge")?;
+    let class = bridge_class(&mut env)?;
     let json = serde_json::to_string(notice)?;
-    let j_json = env.new_string(&json)?;
-    env.call_static_method(
-        class,
+    let j_json_res = env.new_string(&json);
+    let j_json = java_call(&mut env, j_json_res, "create notification JSON string")?;
+    let call_res = env.call_static_method(
+        &class,
         "showNotification",
         "(Ljava/lang/String;)V",
         &[(&j_json).into()],
-    )?;
+    );
+    java_call(&mut env, call_res, "call showNotification")?;
     Ok(())
 }
 

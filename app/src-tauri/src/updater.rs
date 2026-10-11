@@ -1,5 +1,7 @@
 //! In-app GitHub Release updater for ShiniTrack (Mihon-style OTA updates).
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -17,6 +19,8 @@ pub struct UpdateInfo {
     pub download_url: Option<String>,
     pub apk_name: Option<String>,
     pub apk_size: Option<u64>,
+    #[serde(default)]
+    pub downloaded_apk_path: Option<String>,
     pub html_url: String,
 }
 
@@ -35,6 +39,14 @@ pub struct InstallOutcome {
     pub message: String,
     #[serde(default)]
     pub file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DownloadedApkMeta {
+    download_url: String,
+    file_name: String,
+    size: u64,
+    downloaded_at: String,
 }
 
 pub fn clean_github_repo(raw: &str) -> String {
@@ -148,6 +160,7 @@ pub async fn check_github_release(
         download_url,
         apk_name,
         apk_size,
+        downloaded_apk_path: None,
         html_url,
     })
 }
@@ -163,6 +176,7 @@ pub fn mock_update_info(current_version: &str) -> UpdateInfo {
         download_url: None,
         apk_name: None,
         apk_size: None,
+        downloaded_apk_path: None,
         html_url: "https://github.com/stenlysayd/ShiniTrack/releases".to_string(),
     }
 }
@@ -190,10 +204,81 @@ fn append_app_log<R: Runtime>(app: &AppHandle<R>, message: &str) {
     }
 }
 
+fn updates_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    app.path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("updates")
+}
+
+fn update_apk_path<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    updates_dir(app).join("shinitrack-update.apk")
+}
+
+fn update_part_path<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    updates_dir(app).join("shinitrack-update.apk.part")
+}
+
+fn update_meta_path<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    updates_dir(app).join("shinitrack-update.json")
+}
+
+fn existing_download<R: Runtime>(
+    app: &AppHandle<R>,
+    download_url: &str,
+    expected_size: Option<u64>,
+) -> Option<(PathBuf, u64)> {
+    let target_path = update_apk_path(app);
+    let meta_path = update_meta_path(app);
+    let meta_text = std::fs::read_to_string(&meta_path).ok()?;
+    let meta: DownloadedApkMeta = serde_json::from_str(&meta_text).ok()?;
+    if meta.download_url != download_url {
+        return None;
+    }
+    let actual_size = target_path.metadata().ok()?.len();
+    if actual_size == 0 || actual_size != meta.size {
+        return None;
+    }
+    if let Some(size) = expected_size {
+        if size > 0 && actual_size != size {
+            return None;
+        }
+    }
+    Some((target_path, actual_size))
+}
+
+pub fn downloaded_apk_path<R: Runtime>(
+    app: &AppHandle<R>,
+    download_url: &str,
+    expected_size: Option<u64>,
+) -> Option<String> {
+    existing_download(app, download_url, expected_size)
+        .map(|(path, _)| path.to_string_lossy().into_owned())
+}
+
 pub async fn download_and_install_apk<R: Runtime>(
     app: &AppHandle<R>,
     download_url: &str,
 ) -> anyhow::Result<InstallOutcome> {
+    if let Some((path, size)) = existing_download(app, download_url, None) {
+        let path_str = path.to_string_lossy().into_owned();
+        append_app_log(app, &format!("APK pembaruan sudah tersedia: {path_str}"));
+        let _ = app.emit(
+            "update-download-progress",
+            DownloadProgressPayload {
+                progress: 100,
+                downloaded_bytes: size,
+                total_bytes: size,
+            },
+        );
+        return Ok(InstallOutcome {
+            success: true,
+            needs_permission: false,
+            message: "APK pembaruan sudah diunduh. Ketuk Pasang Pembaruan untuk membuka installer.".into(),
+            file_path: path_str,
+        });
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(format!("ShiniTrack-App/{CURRENT_APP_VERSION}"))
         .timeout(std::time::Duration::from_secs(60))
@@ -202,14 +287,11 @@ pub async fn download_and_install_apk<R: Runtime>(
     let mut res = client.get(download_url).send().await?.error_for_status()?;
     let total_size = res.content_length().unwrap_or(0);
 
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .unwrap_or_else(|_| std::env::temp_dir());
-    let updates_dir = cache_dir.join("updates");
+    let updates_dir = updates_dir(app);
     tokio::fs::create_dir_all(&updates_dir).await?;
-    let target_path = updates_dir.join("shinitrack-update.apk");
-    let part_path = updates_dir.join("shinitrack-update.apk.part");
+    let target_path = update_apk_path(app);
+    let part_path = update_part_path(app);
+    let meta_path = update_meta_path(app);
     let _ = tokio::fs::remove_file(&part_path).await;
 
     append_app_log(app, "Mulai mengunduh APK pembaruan");
@@ -249,6 +331,24 @@ pub async fn download_and_install_apk<R: Runtime>(
     append_app_log(app, "Memindahkan APK pembaruan ke berkas final");
     let _ = tokio::fs::remove_file(&target_path).await;
     tokio::fs::rename(&part_path, &target_path).await?;
+    let meta = DownloadedApkMeta {
+        download_url: download_url.to_string(),
+        file_name: target_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("shinitrack-update.apk")
+            .to_string(),
+        size: downloaded,
+        downloaded_at: chrono::Utc::now().to_rfc3339(),
+    };
+    match serde_json::to_vec_pretty(&meta) {
+        Ok(bytes) => {
+            if let Err(e) = tokio::fs::write(&meta_path, bytes).await {
+                append_app_log(app, &format!("Gagal menyimpan metadata APK pembaruan: {e}"));
+            }
+        }
+        Err(e) => append_app_log(app, &format!("Gagal membuat metadata APK pembaruan: {e}")),
+    }
 
     let _ = app.emit(
         "update-download-progress",
@@ -262,14 +362,13 @@ pub async fn download_and_install_apk<R: Runtime>(
     let path_str = target_path.to_string_lossy().into_owned();
     log::info!("Update APK downloaded to: {path_str}");
 
-    append_app_log(app, "Memulai penginstal APK pembaruan");
-    let mut outcome = install_apk_file(&path_str)?;
-    outcome.file_path = path_str;
-    append_app_log(
-        app,
-        &format!("Hasil penginstal APK: success={}, needs_permission={}", outcome.success, outcome.needs_permission),
-    );
-    Ok(outcome)
+    append_app_log(app, "APK pembaruan siap dipasang");
+    Ok(InstallOutcome {
+        success: true,
+        needs_permission: false,
+        message: "APK pembaruan selesai diunduh. Ketuk Pasang Pembaruan untuk membuka installer.".into(),
+        file_path: path_str,
+    })
 }
 
 pub fn install_apk_file(apk_path: &str) -> anyhow::Result<InstallOutcome> {

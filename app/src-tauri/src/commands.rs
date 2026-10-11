@@ -874,7 +874,8 @@ pub async fn delete_download(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdR
 // --------------------------------------------------------------------- updater & reading progress
 
 #[tauri::command]
-pub async fn check_app_update(
+pub async fn check_app_update<R: Runtime>(
+    app: AppHandle<R>,
     ctx: State<'_, AppCtx>,
     repo: Option<String>,
 ) -> CmdResult<crate::updater::UpdateInfo> {
@@ -886,7 +887,15 @@ pub async fn check_app_update(
 
     let repo_to_use = crate::updater::clean_github_repo(&repo_raw);
     match crate::updater::check_github_release(&repo_to_use, crate::updater::CURRENT_APP_VERSION).await {
-        Ok(info) => Ok(info),
+        Ok(mut info) => {
+            if info.update_available {
+                if let Some(download_url) = info.download_url.as_deref() {
+                    info.downloaded_apk_path =
+                        crate::updater::downloaded_apk_path(&app, download_url, info.apk_size);
+                }
+            }
+            Ok(info)
+        }
         Err(e) => {
             log::warn!("update check failed for {repo_to_use}: {e:#}");
             Err("Tidak dapat memeriksa pembaruan".into())
@@ -1291,6 +1300,7 @@ fn dir_size(path: &std::path::Path) -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageInfo {
     pub data_dir: String,
+    pub downloads_dir: String,
     pub cache_bytes: u64,
     pub downloads_bytes: u64,
     pub database_bytes: u64,
@@ -1299,11 +1309,13 @@ pub struct StorageInfo {
 }
 
 #[tauri::command]
-pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
+pub async fn storage_info<R: Runtime>(app: AppHandle<R>, ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
     let data_dir = ctx.dir.to_string_lossy().into_owned();
+    let downloads_dir_path = crate::download::downloads_root(&app, &ctx.dir);
+    let downloads_dir = downloads_dir_path.to_string_lossy().into_owned();
     let cache_root_bytes = dir_size(&ctx.dir.join("cache"));
     let cache_bytes = dir_size(&ctx.dir.join("cache").join("chapters"));
-    let downloads_bytes = dir_size(&ctx.dir.join("downloads"));
+    let downloads_bytes = dir_size(&downloads_dir_path);
 
     let db_path = backend::db_path(&ctx.dir);
     let mut database_bytes = db_path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -1320,6 +1332,7 @@ pub async fn storage_info(ctx: State<'_, AppCtx>) -> CmdResult<StorageInfo> {
 
     Ok(StorageInfo {
         data_dir,
+        downloads_dir,
         cache_bytes,
         downloads_bytes,
         database_bytes,

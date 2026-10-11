@@ -41,6 +41,19 @@ fn sanitize_folder_name(name: &str) -> String {
     }
 }
 
+pub fn downloads_root<R: Runtime>(_app: &AppHandle<R>, fallback_dir: &std::path::Path) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        match crate::jni_bridge::downloads_root() {
+            Ok(path) if !path.trim().is_empty() => return PathBuf::from(path),
+            Ok(_) => log::warn!("Android downloads root is empty; using app data fallback"),
+            Err(e) => log::warn!("Android downloads root unavailable: {e:#}; using app data fallback"),
+        }
+    }
+
+    fallback_dir.join("downloads")
+}
+
 pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) -> anyhow::Result<Download> {
     let ctx = app.state::<AppCtx>();
     let detail = ctx
@@ -62,11 +75,7 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
 
     let clean_title = sanitize_folder_name(&manga_title);
     let ch_folder = format!("Chapter {}", detail.chapter_number);
-    let dir: PathBuf = ctx
-        .dir
-        .join("downloads")
-        .join(&clean_title)
-        .join(&ch_folder);
+    let dir: PathBuf = downloads_root(app, &ctx.dir).join(&clean_title).join(&ch_folder);
     tokio::fs::create_dir_all(&dir).await?;
 
     let urls = detail.image_urls(low);
