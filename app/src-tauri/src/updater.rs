@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 pub const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const CURRENT_BUILD_CODE: u32 = 2004;
+pub const CURRENT_BUILD_CODE: u32 = 1000004;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
