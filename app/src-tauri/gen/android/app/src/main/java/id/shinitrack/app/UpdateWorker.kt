@@ -42,6 +42,11 @@ class UpdateWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            ShiniBridge.init(context)
+            if (!ShiniBridge.isLoaded) {
+                Log.w(TAG, "Native library not loaded; skipping background check")
+                return@withContext Result.failure()
+            }
             Log.i(TAG, "Running background update check...")
             val dir = context.filesDir.absolutePath
             val json = ShiniBridge.nativeBackgroundCheck(dir)
@@ -52,7 +57,7 @@ class UpdateWorker(
                 Notif.show(context, notice)
             }
             Result.success()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Background update check failed", e)
             Result.retry()
         }

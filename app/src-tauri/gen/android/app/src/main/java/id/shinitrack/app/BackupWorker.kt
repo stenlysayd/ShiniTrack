@@ -35,12 +35,13 @@ class BackupWorker(
                 .build()
 
             val workRequest = PeriodicWorkRequestBuilder<BackupWorker>(intervalHours, TimeUnit.HOURS)
+                .setInitialDelay(15, TimeUnit.MINUTES)
                 .setConstraints(constraints)
                 .build()
 
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                ExistingPeriodicWorkPolicy.UPDATE,
+                ExistingPeriodicWorkPolicy.KEEP,
                 workRequest
             )
             Log.i(TAG, "WorkManager periodic backup scheduled ($intervalHours hours)")
@@ -56,6 +57,11 @@ class BackupWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            ShiniBridge.init(context)
+            if (!ShiniBridge.isLoaded) {
+                Log.w(TAG, "Native library not loaded; skipping backup")
+                return@withContext Result.failure()
+            }
             Log.i(TAG, "Running background auto-backup...")
             val dir = context.filesDir.absolutePath
             val success = triggerBackup(dir)
@@ -67,7 +73,7 @@ class BackupWorker(
                 Log.w(TAG, "Background auto-backup returned false")
                 Result.retry()
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Background auto-backup failed", e)
             Result.retry()
         }

@@ -330,7 +330,7 @@ pub async fn library_update<R: Runtime>(
                 Ok(page) => {
                     let ctx = app_handle.state::<AppCtx>();
                     {
-                        let store = ctx.store.lock().unwrap();
+                        let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
                         let _ = store.save_chapters(&page.items);
                         let _ = store.save_history(&page.items);
                         let seen = fav.last_seen();
@@ -360,7 +360,7 @@ pub async fn library_update<R: Runtime>(
                                     released_at: ch.release_date,
                                 };
                                 if let Ok(Some(n)) = backend::accept_event(&store, &ev) {
-                                    notices.lock().unwrap().push(n);
+                                    notices.lock().unwrap_or_else(|e| e.into_inner()).push(n);
                                 }
                             }
                         }
@@ -380,11 +380,11 @@ pub async fn library_update<R: Runtime>(
 
     ctx.store
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .kv_set("last_library_update", &Utc::now().to_rfc3339())
         .map_err(err)?;
 
-    let notices_vec = notices.lock().unwrap().clone();
+    let notices_vec = notices.lock().unwrap_or_else(|e| e.into_inner()).clone();
     show_notices(&app, &notices_vec);
 
     let ok = ok_counter.load(std::sync::atomic::Ordering::SeqCst);
@@ -769,13 +769,13 @@ pub struct ReaderChapter {
 /// downloaded or from the network otherwise.
 #[tauri::command]
 pub async fn open_chapter(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResult<ReaderChapter> {
-    let dl = ctx.store.lock().unwrap().get_download(&chapter_id).map_err(err)?;
-    let cached = ctx.chapter_cache.lock().unwrap().get(&chapter_id).cloned();
+    let dl = ctx.store.lock().unwrap_or_else(|e| e.into_inner()).get_download(&chapter_id).map_err(err)?;
+    let cached = ctx.chapter_cache.lock().unwrap_or_else(|e| e.into_inner()).get(&chapter_id).cloned();
     let detail = match cached {
         Some(d) => Some(d),
         None => match ctx.api.chapter_detail(&chapter_id).await {
             Ok(d) => {
-                ctx.chapter_cache.lock().unwrap().insert(chapter_id.clone(), d.clone());
+                ctx.chapter_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(chapter_id.clone(), d.clone());
                 Some(d)
             }
             Err(e) if dl.is_some() => {
@@ -797,7 +797,9 @@ pub async fn open_chapter(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResu
         }
     } else {
         // Offline: list files from the download directory.
-        let d = dl.expect("checked above");
+        let Some(d) = dl else {
+            return Err("Data unduhan chapter tidak ditemukan".into());
+        };
         let mut pages: Vec<String> = std::fs::read_dir(&d.dir)
             .map_err(err)?
             .filter_map(|e| e.ok())
@@ -818,7 +820,7 @@ pub async fn open_chapter(ctx: State<'_, AppCtx>, chapter_id: String) -> CmdResu
 
     // Check pref.dl.delete_after_read
     let dir_to_delete = {
-        let store = ctx.store.lock().unwrap();
+        let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
         let delete_after_read = store
             .kv_get("pref.dl.delete_after_read")
             .ok()

@@ -76,7 +76,7 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
     let manga_title = ctx
         .store
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get_favorite(&detail.manga_id)
         .ok()
         .flatten()
@@ -103,7 +103,7 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
         let app = app.clone();
         let cid = detail.chapter_id.clone();
         set.spawn(async move {
-            let _permit = sem.acquire_owned().await.expect("semaphore");
+            let Ok(_permit) = sem.acquire_owned().await else { return; };
             let target = dir.join(&file);
             let ok = if let Ok(meta) = tokio::fs::metadata(&target).await {
                 bytes.fetch_add(meta.len(), Ordering::Relaxed);
@@ -158,7 +158,7 @@ pub async fn download_chapter<R: Runtime>(app: &AppHandle<R>, chapter_id: &str) 
         bytes: bytes.load(Ordering::Relaxed),
         done_at: Utc::now(),
     };
-    ctx.store.lock().unwrap().save_download(&d)?;
+    ctx.store.lock().unwrap_or_else(|e| e.into_inner()).save_download(&d)?;
     Ok(d)
 }
 
@@ -224,7 +224,7 @@ impl QueueWorker {
         log::info!("Download queue worker loop started");
         let reset_count = {
             let ctx = app.state::<AppCtx>();
-            let store = ctx.store.lock().unwrap();
+            let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
             match store.queue_reset_downloading() {
                 Ok(count) => count,
                 Err(e) => {
@@ -248,7 +248,7 @@ impl QueueWorker {
             // Fetch next pending item from store
             let next_item = {
                 let ctx = app.state::<AppCtx>();
-                let store = ctx.store.lock().unwrap();
+                let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
                 match store.queue_next_pending() {
                     Ok(item) => item,
                     Err(e) => {
@@ -275,7 +275,7 @@ impl QueueWorker {
             // On desktop, always proceed.
             let wifi_only = {
                 let ctx = app.state::<AppCtx>();
-                let store = ctx.store.lock().unwrap();
+                let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
                 store
                     .kv_get("pref.dl.wifi_only")
                     .ok()
@@ -296,7 +296,7 @@ impl QueueWorker {
             // Mark status as downloading
             {
                 let ctx = app.state::<AppCtx>();
-                let store = ctx.store.lock().unwrap();
+                let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
                 let _ = store.queue_update_status(&item.chapter_id, "downloading");
             }
             let _ = app.emit("queue-changed", ());
@@ -307,7 +307,7 @@ impl QueueWorker {
                     log::info!("Chapter {} downloaded successfully", item.chapter_id);
                     {
                         let ctx = app.state::<AppCtx>();
-                        let store = ctx.store.lock().unwrap();
+                        let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
                         let _ = store.queue_update_status(&item.chapter_id, "done");
                         let _ = store.save_download(&d);
                         let _ = store.queue_remove(&item.chapter_id);
@@ -318,7 +318,7 @@ impl QueueWorker {
                     log::warn!("Chapter {} download failed: {e}", item.chapter_id);
                     {
                         let ctx = app.state::<AppCtx>();
-                        let store = ctx.store.lock().unwrap();
+                        let store = ctx.store.lock().unwrap_or_else(|e| e.into_inner());
                         let _ = store.queue_update_status(&item.chapter_id, "error");
                     }
                     let _ = app.emit("queue-changed", ());

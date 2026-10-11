@@ -26,13 +26,27 @@ fn get_string(env: &mut JNIEnv, s: &JString) -> Option<String> {
     if s.is_null() {
         return None;
     }
-    env.get_string(s).ok().map(|s| s.into())
+    match env.get_string(s) {
+        Ok(val) => Some(val.into()),
+        Err(_) => {
+            if matches!(env.exception_check(), Ok(true)) {
+                let _ = env.exception_clear();
+            }
+            None
+        }
+    }
 }
 
 fn to_jstring(env: &mut JNIEnv, s: &str) -> jstring {
-    env.new_string(s)
-        .map(|j| j.into_raw())
-        .unwrap_or(std::ptr::null_mut())
+    match env.new_string(s) {
+        Ok(j) => j.into_raw(),
+        Err(_) => {
+            if matches!(env.exception_check(), Ok(true)) {
+                let _ = env.exception_clear();
+            }
+            std::ptr::null_mut()
+        }
+    }
 }
 
 fn notices_json(r: anyhow::Result<Vec<backend::Notice>>) -> String {
@@ -110,14 +124,16 @@ pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeInit(
     class: JClass,
     data_dir: JString,
 ) {
-    init_logging();
-    if let Ok(vm) = env.get_java_vm() {
-        let _ = JAVA_VM.set(vm);
-    }
-    cache_bridge_class(&mut env, &class);
-    if let Some(d) = get_string(&mut env, &data_dir) {
-        backend::set_data_dir_override(PathBuf::from(d));
-    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        init_logging();
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = JAVA_VM.set(vm);
+        }
+        cache_bridge_class(&mut env, &class);
+        if let Some(d) = get_string(&mut env, &data_dir) {
+            backend::set_data_dir_override(PathBuf::from(d));
+        }
+    }));
 }
 
 pub fn trigger_install_apk(apk_path: &str) -> anyhow::Result<crate::updater::InstallOutcome> {
@@ -278,114 +294,11 @@ pub fn is_wifi_connected() -> anyhow::Result<bool> {
     let vm = JAVA_VM.get().ok_or_else(|| anyhow::anyhow!("JavaVM not initialized"))?;
     let mut env = vm.attach_current_thread()?;
 
-    // Try obtaining Android Context:
-    // 1) ActivityThread.currentApplication()
-    // 2) Fallback to ShiniBridge.INSTANCE.getCurrentActivity()
-    let context = match (|| -> anyhow::Result<JObject> {
-        let act_thread_class = env.find_class("android/app/ActivityThread")?;
-        let app_obj = env
-            .call_static_method(
-                act_thread_class,
-                "currentApplication",
-                "()Landroid/app/Application;",
-                &[],
-            )?
-            .l()?;
-        if app_obj.is_null() {
-            anyhow::bail!("currentApplication is null");
-        }
-        Ok(app_obj)
-    })() {
-        Ok(ctx) => ctx,
-        Err(_) => {
-            let _ = env.exception_clear();
-            let bridge_class = bridge_class(&mut env)?;
-            let instance = env
-                .get_static_field(
-                    &bridge_class,
-                    "INSTANCE",
-                    "Lid/shinitrack/app/ShiniBridge;",
-                )?
-                .l()?;
-            let act = env
-                .call_method(
-                    instance,
-                    "getCurrentActivity",
-                    "()Landroid/app/Activity;",
-                    &[],
-                )?
-                .l()?;
-            if act.is_null() {
-                anyhow::bail!("No Android context available");
-            }
-            act
-        }
-    };
 
-    // Get ConnectivityManager: context.getSystemService("connectivity")
-    let service_name = env.new_string("connectivity")?;
-    let cm = env
-        .call_method(
-            &context,
-            "getSystemService",
-            "(Ljava/lang/String;)Ljava/lang/Object;",
-            &[(&service_name).into()],
-        )?
-        .l()?;
-    if cm.is_null() {
-        return Ok(false);
-    }
-
-    // Try API 23+ getActiveNetwork -> getNetworkCapabilities -> hasTransport(TRANSPORT_WIFI = 1)
-    let has_wifi_caps = (|| -> anyhow::Result<bool> {
-        let active_net = env
-            .call_method(&cm, "getActiveNetwork", "()Landroid/net/Network;", &[])?
-            .l()?;
-        if active_net.is_null() {
-            return Ok(false);
-        }
-        let caps = env
-            .call_method(
-                &cm,
-                "getNetworkCapabilities",
-                "(Landroid/net/Network;)Landroid/net/NetworkCapabilities;",
-                &[(&active_net).into()],
-            )?
-            .l()?;
-        if caps.is_null() {
-            return Ok(false);
-        }
-        // NetworkCapabilities.TRANSPORT_WIFI = 1
-        let has_wifi = env
-            .call_method(&caps, "hasTransport", "(I)Z", &[1.into()])?
-            .z()?;
-        Ok(has_wifi)
-    })();
-
-    if let Ok(res) = has_wifi_caps {
-        return Ok(res);
-    }
-    let _ = env.exception_clear();
-
-    // Fallback for older APIs: cm.getActiveNetworkInfo() -> isConnected() && getType() == TYPE_WIFI (1)
-    let net_info = env
-        .call_method(
-            &cm,
-            "getActiveNetworkInfo",
-            "()Landroid/net/NetworkInfo;",
-            &[],
-        )?
-        .l()?;
-    if net_info.is_null() {
-        return Ok(false);
-    }
-    let is_connected = env.call_method(&net_info, "isConnected", "()Z", &[])?.z()?;
-    if !is_connected {
-        return Ok(false);
-    }
-    let net_type = env.call_method(&net_info, "getType", "()I", &[])?.i()?;
-    // ConnectivityManager.TYPE_WIFI = 1
-    Ok(net_type == 1)
+    let class = bridge_class(&mut env)?;
+    let val_res = env.call_static_method(&class, "isWifiConnected", "()Z", &[]);
+    let val = java_call(&mut env, val_res, "call isWifiConnected")?;
+    val.z().map_err(|e| e.into())
 }
 
 pub fn show_native_notification(notice: &backend::Notice) -> anyhow::Result<()> {
@@ -409,50 +322,94 @@ pub fn show_native_notification(notice: &backend::Notice) -> anyhow::Result<()> 
 #[no_mangle]
 pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeBackgroundCheck(
     mut env: JNIEnv,
-    _class: JClass,
+    class: JClass,
     data_dir: JString,
 ) -> jstring {
-    init_logging();
-    let Some(dir) = get_string(&mut env, &data_dir) else {
-        return to_jstring(&mut env, "[]");
-    };
-    let json = notices_json(backend::block_on(backend::background_check(&PathBuf::from(dir))));
-    to_jstring(&mut env, &json)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        init_logging();
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = JAVA_VM.set(vm);
+        }
+        cache_bridge_class(&mut env, &class);
+        let Some(dir) = get_string(&mut env, &data_dir) else {
+            return to_jstring(&mut env, "[]");
+        };
+        let json = notices_json(backend::block_on(backend::background_check(&PathBuf::from(dir))));
+        to_jstring(&mut env, &json)
+    })) {
+        Ok(s) => s,
+        Err(_) => {
+            log::error!("panic caught in nativeBackgroundCheck");
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// UnifiedPush message. Returns a JSON array of notices (0 or 1).
 #[no_mangle]
 pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeHandlePush(
     mut env: JNIEnv,
-    _class: JClass,
+    class: JClass,
     data_dir: JString,
     payload: JByteArray,
 ) -> jstring {
-    init_logging();
-    let dir = get_string(&mut env, &data_dir);
-    let bytes = env.convert_byte_array(&payload).unwrap_or_default();
-    let json = match dir {
-        Some(d) => notices_json(backend::handle_push(&PathBuf::from(d), &bytes)),
-        None => "[]".into(),
-    };
-    to_jstring(&mut env, &json)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        init_logging();
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = JAVA_VM.set(vm);
+        }
+        cache_bridge_class(&mut env, &class);
+        let dir = get_string(&mut env, &data_dir);
+        let bytes = match env.convert_byte_array(&payload) {
+            Ok(b) => b,
+            Err(_) => {
+                if matches!(env.exception_check(), Ok(true)) {
+                    let _ = env.exception_clear();
+                }
+                Vec::new()
+            }
+        };
+        let json = match dir {
+            Some(d) => notices_json(backend::handle_push(&PathBuf::from(d), &bytes)),
+            None => "[]".into(),
+        };
+        to_jstring(&mut env, &json)
+    })) {
+        Ok(s) => s,
+        Err(_) => {
+            log::error!("panic caught in nativeHandlePush");
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// New / removed UnifiedPush endpoint. Blocking network call: run off the main thread.
 #[no_mangle]
 pub extern "system" fn Java_id_shinitrack_app_ShiniBridge_nativeRegisterEndpoint(
     mut env: JNIEnv,
-    _class: JClass,
+    class: JClass,
     data_dir: JString,
     endpoint: JString,
 ) -> jboolean {
-    init_logging();
-    let Some(dir) = get_string(&mut env, &data_dir) else { return JNI_FALSE };
-    let endpoint = get_string(&mut env, &endpoint);
-    match backend::block_on(backend::register_endpoint(&PathBuf::from(dir), endpoint)) {
-        Ok(()) => JNI_TRUE,
-        Err(e) => {
-            log::warn!("register endpoint failed: {e:#}");
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        init_logging();
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = JAVA_VM.set(vm);
+        }
+        cache_bridge_class(&mut env, &class);
+        let Some(dir) = get_string(&mut env, &data_dir) else { return JNI_FALSE };
+        let endpoint = get_string(&mut env, &endpoint);
+        match backend::block_on(backend::register_endpoint(&PathBuf::from(dir), endpoint)) {
+            Ok(()) => JNI_TRUE,
+            Err(e) => {
+                log::warn!("register endpoint failed: {e:#}");
+                JNI_FALSE
+            }
+        }
+    })) {
+        Ok(b) => b,
+        Err(_) => {
+            log::error!("panic caught in nativeRegisterEndpoint");
             JNI_FALSE
         }
     }
@@ -465,7 +422,11 @@ pub extern "system" fn Java_id_shinitrack_app_BackupWorker_triggerBackup(
     _this: JObject,
     data_dir: JString,
 ) -> jboolean {
-    init_logging();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        init_logging();
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = JAVA_VM.set(vm);
+        }
     let Some(dir) = get_string(&mut env, &data_dir) else {
         return JNI_FALSE;
     };
@@ -498,6 +459,13 @@ pub extern "system" fn Java_id_shinitrack_app_BackupWorker_triggerBackup(
         }
         Err(e) => {
             log::error!("BackupWorker backup failed: {e:#}");
+            JNI_FALSE
+        }
+    }
+    })) {
+        Ok(b) => b,
+        Err(_) => {
+            log::error!("panic caught in BackupWorker_triggerBackup");
             JNI_FALSE
         }
     }

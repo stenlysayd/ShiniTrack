@@ -154,8 +154,15 @@ fn not_found(msg: &str) -> Response<Vec<u8>> {
     respond(StatusCode::NOT_FOUND, "text/plain", msg.as_bytes().to_vec())
 }
 
+fn image_fetch_sem() -> &'static tokio::sync::Semaphore {
+    static SEM: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SEM.get_or_init(|| tokio::sync::Semaphore::new(6))
+}
+
 pub async fn handle<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Response<Vec<u8>> {
-    let ctx = app.state::<AppCtx>();
+    let Some(ctx) = app.try_state::<AppCtx>() else {
+        return not_found("app initializing");
+    };
     let path = req.uri().path().to_string();
     let mut parts = path.trim_start_matches('/').splitn(3, '/');
     match (parts.next(), parts.next(), parts.next()) {
@@ -176,7 +183,13 @@ async fn page(ctx: &AppCtx, chapter_id: &str, file: &str) -> Response<Vec<u8>> {
         return not_found("bad file name");
     }
     // 1. Downloaded → disk.
-    let dl = ctx.store.lock().unwrap().get_download(chapter_id).ok().flatten();
+    let dl = ctx
+        .store
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_download(chapter_id)
+        .ok()
+        .flatten();
     if let Some(d) = dl {
         let p = PathBuf::from(&d.dir).join(file);
         if let Ok(bytes) = tokio::fs::read(&p).await {
@@ -184,14 +197,19 @@ async fn page(ctx: &AppCtx, chapter_id: &str, file: &str) -> Response<Vec<u8>> {
         }
     }
     // 2. Network, via the (cached) chapter detail.
-    let cached = ctx.chapter_cache.lock().unwrap().get(chapter_id).cloned();
+    let cached = ctx
+        .chapter_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(chapter_id)
+        .cloned();
     let detail = match cached {
         Some(d) => d,
         None => match ctx.api.chapter_detail(chapter_id).await {
             Ok(d) => {
                 ctx.chapter_cache
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .insert(chapter_id.to_string(), d.clone());
                 d
             }
@@ -202,7 +220,9 @@ async fn page(ctx: &AppCtx, chapter_id: &str, file: &str) -> Response<Vec<u8>> {
     let Some(idx) = detail.chapter.data.iter().position(|f| f == file) else {
         return not_found("page not in chapter");
     };
-    let url = detail.image_urls(low).swap_remove(idx);
+    let Some(url) = detail.image_urls(low).into_iter().nth(idx) else {
+        return not_found("page url missing");
+    };
     let cache_dir = ctx.dir.join("cache").join("chapters");
     let cache_key = format!("{:016x}", fnv1a64(&url));
     let bin_path = cache_dir.join(format!("{cache_key}.bin"));
@@ -217,6 +237,7 @@ async fn page(ctx: &AppCtx, chapter_id: &str, file: &str) -> Response<Vec<u8>> {
         let _ = tokio::fs::remove_file(&bin_path).await;
     }
 
+    let _permit = image_fetch_sem().acquire().await.ok();
     match ctx.api.fetch_bytes(&url).await {
         Ok(bytes) => {
             let ctype = content_type(file);
@@ -257,6 +278,10 @@ async fn cover(ctx: &AppCtx, url: &str) -> Response<Vec<u8>> {
     let mut h = DefaultHasher::new();
     url.hash(&mut h);
     let cache = ctx.dir.join("cache").join("img").join(format!("{:016x}", h.finish()));
+    if let Ok(bytes) = tokio::fs::read(&cache).await {
+        return respond(StatusCode::OK, content_type(url), bytes);
+    }
+    let _permit = image_fetch_sem().acquire().await.ok();
     if let Ok(bytes) = tokio::fs::read(&cache).await {
         return respond(StatusCode::OK, content_type(url), bytes);
     }

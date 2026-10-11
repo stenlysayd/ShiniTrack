@@ -22,22 +22,26 @@ object Notif {
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-                val channel = NotificationChannel(
-                    CHANNEL_ID,
-                    CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "Notifikasi rilis chapter baru untuk komik favorit"
-                    enableVibration(true)
-                    vibrationPattern = longArrayOf(0, 250, 150, 250)
-                    enableLights(true)
-                    lightColor = 0xFFE11D48.toInt()
-                    setShowBadge(true)
-                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            try {
+                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+                if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+                    val channel = NotificationChannel(
+                        CHANNEL_ID,
+                        CHANNEL_NAME,
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Notifikasi rilis chapter baru untuk komik favorit"
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 250, 150, 250)
+                        enableLights(true)
+                        lightColor = 0xFFE11D48.toInt()
+                        setShowBadge(true)
+                        lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                    }
+                    manager.createNotificationChannel(channel)
                 }
-                manager.createNotificationChannel(channel)
+            } catch (e: Throwable) {
+                Log.w(TAG, "Failed to create notification channel", e)
             }
         }
     }
@@ -98,26 +102,45 @@ object Notif {
             pendingViewIntent
         )
 
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         manager.notify(notice.id, builder.build())
     }
 
     private fun fetchBitmap(urlStr: String): Bitmap? {
         if (urlStr.isBlank() || !urlStr.startsWith("http")) return null
+        var conn: HttpURLConnection? = null
         return try {
             val url = URL(urlStr)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.doInput = true
-            conn.connectTimeout = 5000
-            conn.readTimeout = 7000
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 ShiniTrack-App")
-            conn.setRequestProperty("Referer", "https://shinigami.id/")
-            conn.connect()
-            val input = conn.inputStream
-            BitmapFactory.decodeStream(input)
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                doInput = true
+                connectTimeout = 5000
+                readTimeout = 7000
+                setRequestProperty("User-Agent", "Mozilla/5.0 ShiniTrack-App")
+                setRequestProperty("Referer", "https://shinigami.id/")
+                connect()
+            }
+            val raw = conn.inputStream.use { BitmapFactory.decodeStream(it) } ?: return null
+            val maxDim = 512
+            if (raw.width > maxDim || raw.height > maxDim) {
+                val scale = maxDim.toFloat() / maxOf(raw.width, raw.height).toFloat()
+                val w = (raw.width * scale).toInt().coerceAtLeast(1)
+                val h = (raw.height * scale).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(raw, w, h, true)
+                if (scaled !== raw) {
+                    raw.recycle()
+                }
+                scaled
+            } else {
+                raw
+            }
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to download cover bitmap: $urlStr", e)
             null
+        } finally {
+            try {
+                conn?.disconnect()
+            } catch (_: Throwable) {
+            }
         }
     }
 }

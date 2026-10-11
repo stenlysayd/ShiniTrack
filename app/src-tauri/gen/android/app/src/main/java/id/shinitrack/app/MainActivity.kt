@@ -7,15 +7,22 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
     companion object {
         private const val TAG = "MainActivity"
     }
+
+    override val handleBackNavigation: Boolean = true
+
+    private var appWebView: WebView? = null
+    private var pendingDeepLinkMangaId: String? = null
 
     private val requestNotificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -39,7 +46,22 @@ class MainActivity : TauriActivity() {
         }
     }
 
+    override fun onWebViewCreate(webView: WebView) {
+        super.onWebViewCreate(webView)
+        appWebView = webView
+        pendingDeepLinkMangaId?.let { mangaId ->
+            pendingDeepLinkMangaId = null
+            navigateToManga(mangaId)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        try {
+            ShiniBridge.init(this)
+        } catch (e: Throwable) {
+            Log.e(TAG, "ShiniBridge.init before super.onCreate failed", e)
+        }
+
         super.onCreate(savedInstanceState)
 
         try {
@@ -96,14 +118,17 @@ class MainActivity : TauriActivity() {
         super.onResume()
         ShiniBridge.currentActivity = this
 
-        // If an APK install was pending user granting REQUEST_INSTALL_PACKAGES, retry automatically:
-        val pending = ShiniBridge.pendingApkPath
-        if (pending != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (packageManager.canRequestPackageInstalls()) {
-                Log.i(TAG, "Install permission granted! Resuming installation for: $pending")
-                ShiniBridge.pendingApkPath = null
-                ShiniBridge.installApk(this, pending)
+        try {
+            val pending = ShiniBridge.pendingApkPath
+            if (pending != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (packageManager.canRequestPackageInstalls()) {
+                    Log.i(TAG, "Install permission granted! Resuming installation for: $pending")
+                    ShiniBridge.pendingApkPath = null
+                    ShiniBridge.installApk(this, pending)
+                }
             }
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to resume APK installation", e)
         }
     }
 
@@ -114,21 +139,48 @@ class MainActivity : TauriActivity() {
         }
     }
 
+    override fun onDestroy() {
+        appWebView = null
+        if (ShiniBridge.currentActivity === this) {
+            ShiniBridge.currentActivity = null
+        }
+        super.onDestroy()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntent(intent)
     }
 
-    private fun handleIntent(intent: Intent?) {
-        val data: Uri? = intent?.data
-        if (data != null && data.scheme == "shinitrack" && data.host == "manga") {
-            val mangaId = data.lastPathSegment
-            if (!mangaId.isNullOrEmpty()) {
-                Log.i(TAG, "Navigating to comic deep link: $mangaId")
-                // On Tauri, eval JavaScript hash navigation
-                // window.location.hash = '#/manga/$mangaId'
+    private fun navigateToManga(mangaId: String) {
+        val webView = appWebView
+        if (webView == null) {
+            pendingDeepLinkMangaId = mangaId
+            return
+        }
+        val safeHash = JSONObject.quote("#/manga/$mangaId")
+        webView.post {
+            try {
+                webView.evaluateJavascript("window.location.hash = $safeHash;", null)
+            } catch (e: Throwable) {
+                Log.w(TAG, "Deep link navigation failed", e)
             }
+        }
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        try {
+            val data: Uri? = intent?.data
+            if (data != null && data.scheme == "shinitrack" && data.host == "manga") {
+                val mangaId = data.lastPathSegment
+                if (!mangaId.isNullOrEmpty()) {
+                    Log.i(TAG, "Navigating to comic deep link: $mangaId")
+                    navigateToManga(mangaId)
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "handleIntent failed", e)
         }
     }
 

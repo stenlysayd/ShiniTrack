@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -213,13 +215,50 @@ object ShiniBridge {
         return activity
     }
 
-    private fun downloadsRootFile(): File {
-        val publicRoot = Environment.getExternalStorageDirectory()
-        return File(publicRoot, DOWNLOAD_ROOT_NAME)
+    @JvmStatic
+    fun isWifiConnected(): Boolean {
+        return try {
+            val ctx = appContext ?: currentActivity?.applicationContext ?: return false
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val network = cm.activeNetwork ?: return false
+                val caps = cm.getNetworkCapabilities(network) ?: return false
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+            } else {
+                @Suppress("DEPRECATION")
+                val info = cm.activeNetworkInfo
+                @Suppress("DEPRECATION")
+                info != null && info.isConnected && info.type == ConnectivityManager.TYPE_WIFI
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "isWifiConnected check failed", e)
+            false
+        }
+    }
+
+    private fun downloadsRootFile(context: Context? = null): File {
+        val ctx = (context ?: appContext ?: currentActivity?.applicationContext)?.applicationContext
+        if (hasSharedStorageAccess()) {
+            try {
+                val publicDir = File(Environment.getExternalStorageDirectory(), DOWNLOAD_ROOT_NAME)
+                if (publicDir.exists() || publicDir.mkdirs()) {
+                    return publicDir
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Public downloads root unavailable, falling back to app storage", e)
+            }
+        }
+        val baseDir = ctx?.getExternalFilesDir(null) ?: ctx?.filesDir ?: Environment.getExternalStorageDirectory()
+        return File(baseDir, DOWNLOAD_ROOT_NAME)
     }
 
     private fun hasSharedStorageAccess(): Boolean {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+        return try {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+        } catch (e: Throwable) {
+            false
+        }
     }
 
     private fun requestSharedStorageAccess(context: Context) {
@@ -235,10 +274,14 @@ object ShiniBridge {
             ctx.startActivity(intent)
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to launch app all-files settings, opening generic page", e)
-            val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(intent)
+            } catch (e2: Throwable) {
+                Log.e(TAG, "Failed to launch generic all-files settings", e2)
             }
-            ctx.startActivity(intent)
         }
         toast(ctx, "Izinkan akses semua file agar unduhan tersimpan di folder ShiniTrack.")
     }
@@ -247,11 +290,7 @@ object ShiniBridge {
     fun prepareDownloadsRoot(): Boolean {
         return try {
             val ctx = appContext ?: currentActivity?.applicationContext ?: return false
-            if (!hasSharedStorageAccess()) {
-                requestSharedStorageAccess(ctx)
-                return false
-            }
-            val dir = downloadsRootFile()
+            val dir = downloadsRootFile(ctx)
             dir.exists() || dir.mkdirs()
         } catch (e: Throwable) {
             Log.e(TAG, "prepareDownloadsRoot failed", e)
@@ -262,10 +301,8 @@ object ShiniBridge {
     @JvmStatic
     fun downloadsRoot(): String {
         return try {
-            if (appContext == null && currentActivity?.applicationContext == null) {
-                return ""
-            }
-            val dir = downloadsRootFile()
+            val ctx = appContext ?: currentActivity?.applicationContext ?: return ""
+            val dir = downloadsRootFile(ctx)
             if (!dir.exists() && !dir.mkdirs()) {
                 Log.w(TAG, "Failed to create downloads root: ${dir.absolutePath}")
             }
@@ -387,13 +424,13 @@ object ShiniBridge {
                 toast(ctx, "Pilih folder ekspor unduhan dulu.")
                 return false
             }
-            if (!hasSharedStorageAccess()) {
+            val downloadsDir = downloadsRootFile(ctx)
+            if (!downloadsDir.exists() && !hasSharedStorageAccess()) {
                 requestSharedStorageAccess(ctx)
                 return false
             }
             thread(name = "ShiniTrackDownloadsExport") {
                 try {
-                    val downloadsDir = downloadsRootFile()
                     val tree = DocumentFile.fromTreeUri(ctx, Uri.parse(treeUriString))
                     if (tree == null || !tree.isDirectory) {
                         toast(ctx, "Folder ekspor unduhan tidak dapat dibuka.")
@@ -640,7 +677,7 @@ object ShiniBridge {
                     )
                 )
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Failed to parse notices: $jsonStr", e)
         }
         return list

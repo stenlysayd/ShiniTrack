@@ -354,12 +354,15 @@ pub async fn register_endpoint(dir: &Path, endpoint: Option<String>) -> anyhow::
 }
 
 /// Builds a small runtime for blocking JNI calls (no Tauri runtime there).
-pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
+pub fn block_on<F, T>(f: F) -> anyhow::Result<T>
+where
+    F: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime")
-        .block_on(f)
+        .context("tokio runtime")?;
+    rt.block_on(f)
 }
 
 #[cfg(test)]

@@ -23,44 +23,61 @@ class PushReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         Log.i(TAG, "Received UnifiedPush action: $action")
-        val dataDir = context.filesDir.absolutePath
+        val appCtx = context.applicationContext
+        val dataDir = appCtx.filesDir.absolutePath
 
         when (action) {
             ACTION_MESSAGE -> {
                 val bytes = intent.getByteArrayExtra(EXTRA_BYTES_MESSAGE) ?: return
-                try {
-                    val json = ShiniBridge.nativeHandlePush(dataDir, bytes)
-                    val notices = ShiniBridge.parseNotices(json)
-                    Log.i(TAG, "Push received, parsed ${notices.size} notices")
-                    for (notice in notices) {
-                        Notif.show(context, notice)
+                val pendingResult = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        ShiniBridge.init(appCtx)
+                        if (!ShiniBridge.isLoaded) return@launch
+                        val json = ShiniBridge.nativeHandlePush(dataDir, bytes)
+                        val notices = ShiniBridge.parseNotices(json)
+                        Log.i(TAG, "Push received, parsed ${notices.size} notices")
+                        for (notice in notices) {
+                            Notif.show(appCtx, notice)
+                        }
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "Error handling push message", e)
+                    } finally {
+                        pendingResult.finish()
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error handling push message", e)
                 }
             }
 
             ACTION_NEW_ENDPOINT -> {
                 val endpoint = intent.getStringExtra(EXTRA_ENDPOINT) ?: return
                 Log.i(TAG, "New UnifiedPush endpoint: $endpoint")
-                // Register with server in background coroutine
+                val pendingResult = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
+                        ShiniBridge.init(appCtx)
+                        if (!ShiniBridge.isLoaded) return@launch
                         val ok = ShiniBridge.nativeRegisterEndpoint(dataDir, endpoint)
                         Log.i(TAG, "Server registration result: $ok")
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         Log.e(TAG, "Failed to register endpoint with server", e)
+                    } finally {
+                        pendingResult.finish()
                     }
                 }
             }
 
             ACTION_UNREGISTERED -> {
                 Log.i(TAG, "UnifiedPush unregistered")
+                val pendingResult = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
+                        ShiniBridge.init(appCtx)
+                        if (!ShiniBridge.isLoaded) return@launch
                         ShiniBridge.nativeRegisterEndpoint(dataDir, "")
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         Log.e(TAG, "Failed to unregister endpoint", e)
+                    } finally {
+                        pendingResult.finish()
                     }
                 }
             }
